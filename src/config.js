@@ -59,6 +59,7 @@ const DEFAULTS = {
   autoMinProfitPct: 2.0,
   autoMaxStakeTotal: 50,
   autoDailyMaxBets: 10,
+  alertSuspect: false, // Telegram alerts for surebets with a stale-looking leg (never auto-bet either way)
   autoPrematchOnly: true,
   maxOddsDropPct: 0.0, // abort a leg if slip odds are lower than scanned odds by more than this
   bookmakers: {

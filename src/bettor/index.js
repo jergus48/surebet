@@ -103,6 +103,7 @@ async function placeLeg(p) {
 function autoAllowed(settings, sb) {
   if (sb.profitPct < settings.autoMinProfitPct) return `profit ${sb.profitPct}% < ${settings.autoMinProfitPct}%`;
   if (sb.staked > settings.autoMaxStakeTotal) return `stake ${sb.staked} > max ${settings.autoMaxStakeTotal}`;
+  if (sb.suspect) return 'suspect: a price is far above the other books (likely stale)';
   if (settings.autoPrematchOnly && sb.live) return 'live bets disabled for auto';
   if (db.autoBetsToday() >= settings.autoDailyMaxBets) return 'daily auto-bet limit reached';
   return null;

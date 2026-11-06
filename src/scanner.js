@@ -30,6 +30,8 @@ function reportNew(s, sb, siblings = []) {
   const tag = sb.live ? 'LIVE ' : '';
   db.log('info', `NEW ${tag}+${sb.profitPct}% ${sb.home}-${sb.away} ${sb.market}${sb.point != null ? ' ' + sb.point : ''} [${sb.legs.map(l => `${l.book} ${l.sel}@${l.price}`).join(', ')}]`);
   lastAlert.set(sb.key, sb.profitPct);
+  // Suspect (a leg far above the other books) stays in history and the dashboard, but no alert and never a bet.
+  if (sb.suspect && !s.alertSuspect) return;
   notify.send(s, notify.format(sb, { siblings }), { html: true }).then(sent => sent && db.markNotified(sb.key)).catch(e => db.log('warn', `telegram: ${e.message}`));
   if (s.betMode !== 'off') bettor.execute(s, sb).catch(e => db.log('error', `bettor: ${e.message}`));
 }
@@ -38,6 +40,7 @@ function reportNew(s, sb, siblings = []) {
 function maybeUpdate(s, sb, siblings = []) {
   const prev = lastAlert.get(sb.key);
   if (prev == null || Math.abs(sb.profitPct - prev) < 0.5) return;
+  if (sb.suspect && !s.alertSuspect) return;
   db.log('info', `UPDATE ${sb.home}-${sb.away} ${prev}% -> ${sb.profitPct}%`);
   lastAlert.set(sb.key, sb.profitPct);
   notify.send(s, notify.format(sb, { siblings, previous: prev }), { html: true }).catch(e => db.log('warn', `telegram: ${e.message}`));

@@ -55,7 +55,7 @@ function format(sb, opts = {}) {
     const age = l.updated ? Math.max(0, Math.round((now - l.updated) / 60000)) : null;
     lines.push(`<b>${esc(bookName(l.book))}</b>:${age != null ? ` <i>(odds ${age} min old)</i>` : ''}`);
     lines.push(`  ${esc(selLabel(sb, l))} → <b>${l.price}</b>`);
-    lines.push(`  Stake: ${fmtMoney(l.stake)} €${isUrl(l.link) ? ` <a href="${esc(l.link)}">Match</a>` : ''}`);
+    lines.push(`  Stake: ${fmtMoney(l.stake)} €${isUrl(l.link) ? ` <a href="${esc(l.link)}">${l.linkGeneric ? 'Site (find the match by name)' : 'Match'}</a>` : ''}`);
   }
   const payout = sb.staked + sb.worstProfit;
   lines.push('', `Total stake: ${fmtMoney(sb.staked)} € → min. payout ${fmtMoney(payout)} € (profit ${sb.worstProfit >= 0 ? '+' : ''}${fmtMoney(sb.worstProfit)} €)`);

@@ -81,7 +81,7 @@ function parse(res, sportKey) {
     if (m.p.length !== 2 || !(m.t > now)) continue; // outrights, specials, already started
     const link = `${ORIGIN}/mk#/betting`;
     const odds = [];
-    const push = (market, point, sel, price) => { if (price > 1) odds.push({ book: 'mozzart', market, point, sel, price, link, updated: now }); };
+    const push = (market, point, sel, price) => { if (price > 1) odds.push({ book: 'mozzart', market, point, sel, price, link, linkGeneric: true, updated: now }); };
     const main = {};
     for (const [gameName, gameId, sub, , value] of res.odds[m.id] || []) {
       if (gameName === MAIN_NAME && /^(1|X|2)$/.test(sub)) main[sub] = value;

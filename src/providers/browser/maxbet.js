@@ -48,7 +48,7 @@ function parse(matches, sportKey) {
     if (!m.home || !m.away || m.blocked || m.status !== 0 || !(m.t > now)) continue;
     const link = `${ORIGIN}/mk`;
     const odds = [];
-    const push = (sel, price) => { if (price > 1) odds.push({ book: 'maxbet', market: 'h2h', point: null, sel, price: Number(price), link, updated: now }); };
+    const push = (sel, price) => { if (price > 1) odds.push({ book: 'maxbet', market: 'h2h', point: null, sel, price: Number(price), link, linkGeneric: true, updated: now }); };
     if (draw) {
       // Need the full 3-way (regulation) market, never a partial one.
       if (!(m.o1 > 1 && m.o2 > 1 && m.o3 > 1)) continue;

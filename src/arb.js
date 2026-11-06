@@ -72,6 +72,14 @@ function findSurebets(events, opts = {}) {
         const st = stakes(legs.map(l => l.price), total, total < 30 ? Math.min(step, 0.5) : step);
         // Rounded stakes must still lock in at least the minimum profit, else it is not a real surebet.
         if (st.worstProfit / st.staked * 100 < minProfitPct * 0.5 || st.worstProfit <= 0) continue;
+        const legOut = legs.map((l, i) => {
+          // How far this price sits above what the other books offer for the same selection.
+          // A big gap usually means one book has a stale line that is about to be corrected.
+          const others = list.filter(o => o.sel === l.sel && o.book !== l.book).map(o => o.price).sort((a, b) => a - b);
+          const ref = others.length ? others[Math.floor(others.length / 2)] : null;
+          const outlier = ref != null && l.price >= ref * 1.2;
+          return { book: l.book, sel: l.sel, price: l.price, link: l.link || null, linkGeneric: !!l.linkGeneric, updated: l.updated || null, stake: st.stakes[i], ref, outlier };
+        });
         out.push({
           key: [ev.id, market, point ?? '', ...legs.map(l => `${l.book}:${l.sel}`)].join('|'),
           eventId: ev.id,
@@ -85,14 +93,9 @@ function findSurebets(events, opts = {}) {
           market,
           point: point ?? null,
           profitPct: Math.round(profitPct * 100) / 100,
-          legs: legs.map((l, i) => {
-            // How far this price sits above what the other books offer for the same selection.
-            // A big gap usually means one book has a stale line that is about to be corrected.
-            const others = list.filter(o => o.sel === l.sel && o.book !== l.book).map(o => o.price).sort((a, b) => a - b);
-            const ref = others.length ? others[Math.floor(others.length / 2)] : null;
-            const outlier = ref != null && l.price >= ref * 1.2;
-            return { book: l.book, sel: l.sel, price: l.price, link: l.link || null, updated: l.updated || null, stake: st.stakes[i], ref, outlier };
-          }),
+          legs: legOut,
+          // A leg far above the other books is usually a stale line, not a bettable edge.
+          suspect: legOut.some(l => l.outlier),
           staked: st.staked,
           worstProfit: Math.round(st.worstProfit * 100) / 100,
         });

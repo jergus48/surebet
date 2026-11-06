@@ -74,7 +74,10 @@ function parse(events, sportKey, sportId, sportPath) {
     if (!draw) { home = nameFix(home); away = nameFix(away); }
     const start = Date.parse(`${String(e.scheduledTimeUtc || '').replace(/Z$/, '')}Z`);
     if (!Number.isFinite(start)) continue;
-    const link = `${ORIGIN}/sports/${sportPath}-${sportId}`;
+    // Per-match page: /sports/event/<slug>-<eventId> (the id decides the page, the slug is cosmetic).
+    const eid = e.eventId || e.sportEventId;
+    const slug = String(e.eventPath || `${home} vs. ${away}`).toLowerCase().replace(/\s+vs\.\s+/, ' vs ').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const link = eid ? `${ORIGIN}/sports/event/${slug}-${eid}` : `${ORIGIN}/sports/${sportPath}-${sportId}`;
     const odds = [];
     for (const m of e.markets || []) {
       if (m.marketStatus !== 'Active') continue;

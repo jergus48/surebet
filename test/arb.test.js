@@ -61,6 +61,11 @@ console.log('arb tests passed');
   const f = r.find(s => s.legs.some(l => l.book === 'fortuna'));
   if (!f || !f.legs.find(l => l.book === 'fortuna').outlier) throw new Error('outlier flag missing');
   if (f.legs.find(l => l.book === 'synottip').outlier) throw new Error('false outlier');
+  if (!f.suspect) throw new Error('suspect flag missing');
+  const calm = findSurebets([{ ...ev, drawPossible: false, odds: [
+    { book: 'a', market: 'h2h', point: null, sel: '1', price: 2.2, linkGeneric: true }, { book: 'b', market: 'h2h', point: null, sel: '2', price: 2.2 }] }], { minProfitPct: 2, });
+  if (!calm.length || calm[0].suspect) throw new Error('false suspect');
+  if (!calm[0].legs.find(l => l.book === 'a').linkGeneric) throw new Error('linkGeneric not passed through');
   console.log('outlier tests passed');
 }
 
