@@ -30,7 +30,9 @@ Every leg in the dashboard and in Telegram links to that match on that bookmaker
 ## Run 24/7 on a Mac mini
 
 1. Install Google Chrome and Node.js 22.13+ (`brew install node`, or the installer from nodejs.org).
-2. Copy this folder to the Mac (skip `node_modules/`; keep `data/settings.json` to keep your settings).
+2. `git clone https://github.com/jergus48/surebet.git && cd surebet`. Settings are not in git
+   (`data/` is ignored): optionally copy `data/settings.json` from the old machine into `data/`.
+   Update later with `bash scripts/mac/update.sh`.
 3. In Terminal, inside the folder: `bash scripts/mac/install.sh`
    It installs dependencies, registers a LaunchAgent (starts at login, restarts on crash,
    keeps the Mac awake with `caffeinate`), and starts the bot.
