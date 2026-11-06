@@ -1,0 +1,17 @@
+{
+  "name": "surebet-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Surebet scanner + dashboard + CDP bet executor (debug Chrome per bookmaker).",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node test/arb.test.js && node test/match.test.js && node test/oddsapiio.test.js && node test/live.test.js && node test/bettor.test.js && node test/analytics.test.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.3.0"
+  }
+}

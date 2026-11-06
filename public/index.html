@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surebet</title>
+<style>
+  :root { --bg:#14161a; --panel:#1c1f24; --line:#2b2f36; --text:#e8eaed; --muted:#9aa0a8; --green:#3fb950; --greenbg:#12351c; --red:#f85149; --amber:#d29922; --blue:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 -apple-system,Segoe UI,Roboto,sans-serif; }
+  header { position:sticky; top:0; background:var(--panel); border-bottom:1px solid var(--line); padding:12px 16px 0; z-index:5; }
+  .top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  h1 { font-size:22px; margin:0; }
+  .pill { padding:4px 12px; border-radius:999px; font-weight:600; font-size:14px; }
+  .pill.on { background:var(--greenbg); color:var(--green); } .pill.off { background:#3a1d1d; color:var(--red); }
+  nav { display:flex; gap:4px; overflow-x:auto; margin-top:10px; }
+  nav button { background:none; border:0; color:var(--muted); font-size:16px; padding:10px 12px; border-radius:8px 8px 0 0; cursor:pointer; white-space:nowrap; }
+  nav button.active { color:var(--text); background:var(--bg); font-weight:600; }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+  .kpi .v { font-size:24px; font-weight:700; } .kpi .l { color:var(--muted); font-size:13px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { padding:9px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { color:var(--muted); font-weight:500; font-size:13px; }
+  td.n, th.n { text-align:right; }
+  .scroll { overflow-x:auto; }
+  .muted { color:var(--muted); font-size:13px; }
+  .green { color:var(--green); } .red { color:var(--red); } .amber { color:var(--amber); }
+  button.btn { background:#2b313a; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 14px; cursor:pointer; font-size:14px; }
+  button.btn:hover { border-color:var(--muted); }
+  button.primary { background:#238636; border-color:#2ea043; }
+  button.danger { background:#6e2020; border-color:#a33; }
+  input, select, textarea { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px; font-size:14px; width:100%; }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+  .form { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .legs div { white-space:nowrap; }
+  .tag { display:inline-block; font-size:11px; padding:1px 6px; border-radius:6px; background:#3a2a10; color:var(--amber); margin-left:4px; }
+  pre.log { white-space:pre-wrap; font:12px/1.5 ui-monospace,Consolas,monospace; margin:0; max-height:70vh; overflow:auto; }
+  #login { max-width:340px; margin:80px auto; }
+  .hidden { display:none !important; }
+  code { background:var(--bg); padding:2px 6px; border-radius:6px; font-size:12px; word-break:break-all; }
+</style>
+</head>
+<body>
+<div id="login" class="card hidden">
+  <h1 style="margin-bottom:12px">Surebet</h1>
+  <p class="muted" id="loginHint">Enter password.</p>
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
+  <div style="margin-top:10px" class="row"><button class="btn primary" onclick="login()">Log in</button><span id="loginErr" class="red"></span></div>
+</div>
+
+<div id="app" class="hidden">
+<header>
+  <div class="top">
+    <h1>💰 Surebet</h1>
+    <span id="scanPill" class="pill off">Scanner: stopped</span>
+    <span style="flex:1"></span>
+    <button class="btn hidden" id="logoutBtn" onclick="logout()">Log out</button>
+  </div>
+  <nav id="tabs">
+    <button data-t="overview" class="active">Overview</button>
+    <button data-t="surebets">Surebets</button>
+    <button data-t="history">History</button>
+    <button data-t="log">Log</button>
+    <button data-t="settings">Settings</button>
+  </nav>
+</header>
+<main>
+  <section id="t-overview">
+    <div class="card grid" id="kpis"></div>
+    <div class="card">
+      <div class="row">
+        <button class="btn primary" onclick="post('/api/scanner/start').then(refresh)">Start</button>
+        <button class="btn danger" onclick="post('/api/scanner/stop').then(refresh)">Stop</button>
+        <button class="btn" onclick="post('/api/scanner/poll').then(refresh)">Scan now</button>
+      </div>
+      <p class="muted" id="statusLine">Loading status…</p>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Bookmakers (each in its own Chrome window)</h3>
+      <div id="books"></div>
+    </div>
+  </section>
+
+  <section id="t-surebets" class="hidden">
+    <div class="card scroll"><table id="sbTable"></table></div>
+  </section>
+
+  <section id="t-history" class="hidden">
+    <div class="card row">
+      <a href="/api/export.csv"><button class="btn">⬇️ Download CSV</button></a>
+    </div>
+    <h2 id="statTitle"></h2>
+    <div class="card scroll"><table id="statSport"></table></div>
+    <div class="card scroll"><table id="statBooks"></table></div>
+    <h2 id="anTitle"></h2>
+    <div class="card scroll"><div class="muted" id="anNote" style="margin-bottom:8px"></div><table id="anBooks"></table></div>
+    <div class="card scroll"><table id="anCombos"></table></div>
+    <div class="card scroll"><table id="histTable"></table></div>
+    <div class="card scroll"><h3 style="margin-top:0">Bets (bot)</h3><table id="betsTable"></table></div>
+  </section>
+
+  <section id="t-log" class="hidden">
+    <div class="card"><label><input type="checkbox" id="showDebug" style="width:auto"> debug</label><pre class="log" id="logBox"></pre></div>
+  </section>
+
+  <section id="t-settings" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Odds source</h3>
+      <div class="form">
+        <div><label>Provider</label><select id="s-provider"></select></div>
+        <div><label>Odds API key</label><input id="s-oddsApiKey" type="password"></div>
+        <div><label>Regions</label><input id="s-oddsApiRegions"></div>
+        <div><label>Bookmakers (keys, overrides regions)</label><input id="s-oddsApiBookmakers"></div>
+        <div><label>Markets</label><input id="s-oddsApiMarkets"></div>
+        <div><label>Interval (s)</label><input id="s-pollSeconds" type="number"></div>
+        <div><label>Min. credits left</label><input id="s-minCreditsLeft" type="number"></div>
+      </div>
+      <p class="muted" id="creditEst"></p>
+      <h4>Provider "browser": sports</h4>
+      <div id="scanSports" class="row"></div>
+      <div class="form" style="margin-top:10px">
+        <div><label>Odds-API.io key (for bookmakers with source "api" and comparison)</label><input id="s-oddsApiIoKey" type="password"></div>
+        <div><label>API: hours ahead</label><input id="s-apiHoursAhead" type="number"></div>
+      </div>
+      <p class="muted">Each bookmaker in the JSON below has a <code>source</code>: "browser" (read from its Chrome window) or "api" (Odds-API.io, <code>apiName</code>).</p>
+      <div class="row"><button class="btn" onclick="loadSports()">Load sports</button><span class="muted">selected: <span id="sportCount">0</span></span></div>
+      <div id="sportList" style="max-height:260px;overflow:auto;margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Filters</h3>
+      <div class="form">
+        <div><label>Min. profit %</label><input id="s-minProfitPct" type="number" step="0.1"></div>
+        <div><label>Max. profit % (above = data error)</label><input id="s-maxProfitPct" type="number" step="0.1"></div>
+        <div><label>Bankroll per surebet (used when no stake tiers)</label><input id="s-bankrollPerBet" type="number"></div>
+        <div style="grid-column:1/-1"><label>Stake tiers: total stake per surebet by profit (JSON, [] = flat bankroll)</label>
+          <textarea id="s-stakeTiers" rows="3" style="font-family:monospace"></textarea>
+          <div class="muted">e.g. [{"minProfitPct":2,"stake":10},{"minProfitPct":5,"stake":20}]: 2%+ stakes 10, 5%+ stakes 20. Applies to alerts and auto-betting.</div></div>
+        <div><label>Round stake to</label><input id="s-roundStakeTo" type="number" step="0.5"></div>
+        <div><label>Live matches</label><select id="s-includeLive"><option value="true">yes</option><option value="false">no</option></select></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Telegram</h3>
+      <div class="form">
+        <div><label>Bot token</label><input id="s-telegramBotToken" type="password"></div>
+        <div><label>Chat ID</label><input id="s-telegramChatId"></div>
+      </div>
+      <p class="muted">1. In Telegram message @BotFather /newbot and paste the token here. 2. Send your bot "hi". 3. Click "Find chat ID", then "Test". (You can also type your chat ID by hand.)</p>
+      <div style="margin-top:8px" class="row">
+        <button class="btn" onclick="saveTg().then(()=>post('/api/telegram/chatid')).then(r=>{alert(r.error||('Chat ID set: '+r.chatId+' '+r.name)); loadSettings();})">Find chat ID</button>
+        <button class="btn" onclick="saveTg().then(()=>post('/api/telegram/test')).then(r=>alert(r.error||('Test alert sent via @'+r.bot+'. Check Telegram.')))">Test</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Automatic betting</h3>
+      <p class="muted">off = alerts only · fill = opens the match in each bookmaker window and fills the slip, you click Place · auto = places bets itself within the limits.</p>
+      <div class="form">
+        <div><label>Mode</label><select id="s-betMode"><option>off</option><option>fill</option><option>auto</option></select></div>
+        <div><label>Auto: min. profit %</label><input id="s-autoMinProfitPct" type="number" step="0.1"></div>
+        <div><label>Auto: max. total stake</label><input id="s-autoMaxStakeTotal" type="number"></div>
+        <div><label>Auto: max. bets/day</label><input id="s-autoDailyMaxBets" type="number"></div>
+        <div><label>Auto: pre-match only</label><select id="s-autoPrematchOnly"><option value="true">yes</option><option value="false">no</option></select></div>
+        <div><label>Max. odds drop on slip %</label><input id="s-maxOddsDropPct" type="number" step="0.1"></div>
+      </div>
+      <h4>Bookmakers</h4>
+      <div id="bookToggles" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px"></div>
+      <textarea id="s-bookmakers" rows="7" style="font-family:monospace"></textarea>
+      <p class="muted">Tick to enable, then Save. JSON: key = bookmaker key from the provider, port = its own debug Chrome.</p>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Dashboard password</h3>
+      <input id="s-dashboardPassword" type="password" placeholder="new password (8+ characters)">
+    </div>
+    <button class="btn primary" onclick="saveSettings()">Save</button> <span id="saveMsg" class="green"></span>
+  </section>
+</main>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const BOOK = { tipsport: 'Tipsport', bet365: 'Bet365', pinnacle: 'Pinnacle', fortuna: 'Fortuna', nike: 'Niké', doxxbet: 'DOXXbet', tipos: 'Tipos', synottip: 'Synottip', chance: 'Chance', stake: 'Stake', olybet: 'OlyBet', inbet: 'Inbet', maxbet: 'Maxbet MK', mozzart: 'Mozzart MK' };
+const bn = k => BOOK[k] || k;
+const dt = ms => ms ? new Date(ms).toLocaleString('en-GB', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+let tab = 'overview', settings = null, sportsSel = new Set();
+
+async function get(u) { const r = await fetch(u); if (r.status === 401) { showLogin(); throw new Error('login'); } return r.json(); }
+async function post(u, body) { const r = await fetch(u, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }); return r.json(); }
+
+async function boot() {
+  const s = await (await fetch('/api/session')).json();
+  if (!s.loggedIn) return showLogin(s.needsSetup);
+  $('login').classList.add('hidden'); $('app').classList.remove('hidden');
+  $('logoutBtn').classList.toggle('hidden', !s.authOn); // only when a password is set
+  refresh(); setInterval(refresh, 5000);
+}
+function showLogin(setup) {
+  $('app').classList.add('hidden'); $('login').classList.remove('hidden');
+  if (setup) $('loginHint').textContent = 'First run: choose a password (8+ characters).';
+}
+async function login() {
+  const r = await post('/api/login', { password: $('pw').value });
+  if (r.error) return $('loginErr').textContent = r.error;
+  boot();
+}
+$('pw').addEventListener('keydown', e => e.key === 'Enter' && login());
+async function logout() { await post('/api/logout'); location.reload(); }
+
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  tab = b.dataset.t;
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('main section').forEach(s => s.classList.toggle('hidden', s.id !== 't-' + tab));
+  if (tab === 'settings') loadSettings(); else refresh();
+});
+
+const safeUrl = u => (/^https?:\/\//i.test(u || '') ? u : null);
+// Each leg links to that match on that bookmaker's own site, to double check the price.
+function legsHtml(sb) {
+  return '<div class="legs">' + sb.legs.map(l => {
+    const u = safeUrl(l.link);
+    const name = u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="color:var(--blue)">${esc(bn(l.book))} ↗</a>` : esc(bn(l.book));
+    const fast = l.outlier ? ` <span class="tag" title="Price is well above the other books (~${l.ref}); likely a stale line that closes within minutes">⚡ check now</span>` : '';
+    return `<div>${name} <b>${esc(l.sel)}</b> @ ${l.price} · ${l.stake}${fast}</div>`;
+  }).join('') + '</div>';
+}
+function matchHtml(sb) {
+  return `${esc(sb.home)} – ${esc(sb.away)}${sb.live ? '<span class="tag">LIVE</span>' : ''}<div class="muted">${esc(sb.league)} · ${dt(sb.start)}</div>`;
+}
+
+async function refresh() {
+  if (tab === 'settings') return;
+  const st = await get('/api/status');
+  $('scanPill').className = 'pill ' + (st.running ? 'on' : 'off');
+  $('scanPill').textContent = 'Scanner: ' + (st.running ? 'running' : 'stopped');
+
+  if (tab === 'overview') {
+    const c = st.credits || {};
+    $('kpis').innerHTML = [
+      ['Active surebets', st.activeCount], ['Matches in last scan', st.lastEvents],
+      ['Live matches (last poll)', st.live ? st.live.events : '–'], ['Live candidates (unconfirmed)', st.live ? st.live.candidates : '–'],
+      ['Bet mode', st.betMode], ['Auto bets today', st.autoBetsToday],
+    ].map(([l, v]) => `<div class="kpi"><div class="v">${esc(v)}</div><div class="l">${l}</div></div>`).join('');
+    const ago = t => (t ? Math.round((Date.now() - t) / 1000) + ' s ago' : 'not run yet');
+    const lv = st.live || {};
+    $('statusLine').innerHTML =
+      `<b>Main scan</b> (all bookmakers, pre-match): ${ago(st.lastRun)}` + (st.lastError ? ` · <span class="red">${esc(st.lastError)}</span>` : ' · <span class="green">OK</span>') +
+      `<br><b>Live scan</b> (every ~15 s): ${ago(lv.lastRun)}` + (lv.lastError ? ` · <span class="red">${esc(lv.lastError)}</span>` : ' · <span class="green">OK</span>') +
+      `<br>Bookmaker windows do not move while reading; the bot reads them in the background.`;
+    const bs = (st.credits && st.credits.books) || {};
+    if (!$('books').contains(document.activeElement)) $('books').innerHTML = Object.entries(st.books).map(([k, b]) => `
+      <div style="padding:8px 0;border-bottom:1px solid var(--line)">
+        <div class="row"><b>${esc(b.name)}</b>
+          <span class="${b.enabled ? 'green' : 'muted'}">${b.enabled ? 'enabled' : 'disabled'}</span>
+          <span class="muted">source: ${esc(b.source || 'browser')}</span>
+          ${bs[k] ? `<span class="${bs[k].ok ? 'green' : 'red'}">${bs[k].ok ? `${bs[k].events} matches · ${(bs[k].ms / 1000).toFixed(1)} s` : esc(bs[k].error)}</span>` : ''}
+          <span class="${b.chromeUp ? 'green' : 'muted'}">Chrome :${b.port} ${b.chromeUp ? 'running' : 'not running'}</span>
+          <span class="${b.calibrated ? 'green' : 'amber'}">${b.calibrated ? 'calibrated' : 'not calibrated (only opens the match)'}</span>
+          <span style="flex:1"></span>
+          <label style="margin:0;display:flex;gap:6px;align-items:center" title="Money you keep at this bookmaker.">Bankroll
+            <input type="number" min="0" style="width:80px" value="${b.bankroll || ''}" placeholder="not set" onchange="saveCap('${k}', 'bankroll', this.value)"></label>
+          <label style="margin:0;display:flex;gap:6px;align-items:center" title="Max stake per bet as % of that bankroll.">Stake %
+            <input type="number" min="0" max="100" step="0.5" style="width:60px" value="${b.stakePercent || ''}" placeholder="not set" onchange="saveCap('${k}', 'stakePercent', this.value)"></label>
+          <label style="margin:0;display:flex;gap:6px;align-items:center" title="Fixed cap per bet, used when bankroll or % is not set. Auto-betting is blocked for a book with neither.">or max
+            <input type="number" min="0" style="width:70px" value="${b.maxStakePerBet || ''}" placeholder="not set" onchange="saveCap('${k}', 'maxStakePerBet', this.value)"></label>
+          ${b.apiName ? `<button class="btn" onclick="compareBook('${k}')">Compare browser vs API</button>` : ''}
+          <button class="btn" onclick="post('/api/chrome/${k}/launch').then(r=>{if(r.error)alert(r.error);refresh()})">Open window</button>
+        </div>
+        <div class="muted" style="margin-top:4px">Log in once by hand in that window; the login stays in the profile. Command: <code>${esc(b.launchCommand)}</code></div>
+      </div>`).join('');
+  }
+
+  if (tab === 'surebets') {
+    const list = await get('/api/surebets');
+    $('sbTable').innerHTML = '<tr><th>Profit</th><th>Match</th><th>Market</th><th>Bets</th><th></th></tr>' +
+      (list.length ? list.map(sb => `<tr>
+        <td class="green"><b>${sb.profitPct}%</b><div class="muted">+${sb.worstProfit}</div></td>
+        <td>${matchHtml(sb)}</td><td>${esc(sb.label)}</td><td>${legsHtml(sb)}</td>
+        <td><button class="btn" onclick='bet(${JSON.stringify(sb.key)},"fill")'>Open</button></td></tr>`).join('')
+        : '<tr><td colspan="5" class="muted">No surebets right now.</td></tr>');
+  }
+
+  if (tab === 'history') {
+    const [stats, hist, bets, an] = await Promise.all([get('/api/stats'), get('/api/history'), get('/api/bets'), get('/api/analytics')]);
+    $('anTitle').textContent = `Combination study: ${an.days} of ${an.studyDays} days, ${an.observations} surebets seen (from ${an.studyMinPct}%)`;
+    $('anNote').textContent = an.ready ? 'Study finished: books marked REMOVE never took part in any surebet.' : 'Still collecting. Verdicts appear after 7 days of running. Counts include near-misses from 0.5% profit.';
+    $('anBooks').innerHTML = '<tr><th>Bookmaker</th><th class="n">Surebets</th><th class="n">&ge;1%</th><th class="n">&ge;2%</th><th class="n">Live</th><th class="n">Events/scan</th><th class="n">Shared</th><th>Top partners</th><th>Verdict</th></tr>' +
+      an.books.map(b => `<tr><td>${esc(bn(b.book))}${b.enabled ? '' : ' <span class="muted">(off)</span>'}</td><td class="n"><b>${b.surebets}</b></td><td class="n">${b.over1}</td><td class="n">${b.over2}</td><td class="n">${b.live}</td><td class="n">${b.avgEventsPerPoll}</td><td class="n">${b.sharedPct} %</td><td class="muted">${esc(b.topPartners.map(p => p.replace(/^(\w+)/, m => bn(m))).join(', '))}</td><td class="${/REMOVE/.test(b.verdict) ? 'red' : b.verdict === 'keep' ? 'green' : 'amber'}">${esc(b.verdict)}</td></tr>`).join('');
+    $('anCombos').innerHTML = '<tr><th>Combination</th><th class="n">Total</th><th class="n">&ge;1%</th><th class="n">&ge;2%</th><th class="n">Live</th><th class="n">Best</th></tr>' +
+      an.combos.map(c => `<tr><td>${esc(c.combo.split(' + ').map(bn).join(' + '))}</td><td class="n"><b>${c.n}</b></td><td class="n">${c.n1}</td><td class="n">${c.n2}</td><td class="n">${c.live}</td><td class="n green">${c.best.toFixed(2)} %</td></tr>`).join('');
+    $('statTitle').textContent = stats.n ? `Stats – ${stats.n} tips since ${dt(stats.t)}` : 'Stats – nothing yet';
+    $('statSport').innerHTML = '<tr><th>Sport</th><th class="n">Tips</th><th class="n">Prematch</th><th class="n">Live</th><th class="n">Avg profit</th></tr>' +
+      stats.sports.map(r => `<tr><td>${esc(r.sport)}</td><td class="n"><b>${r.n}</b></td><td class="n">${r.prematch}</td><td class="n">${r.live}</td><td class="n">${r.avg_profit.toFixed(2)} %</td></tr>`).join('');
+    $('statBooks').innerHTML = '<tr><th>Bookmakers</th><th class="n">Tips</th></tr>' +
+      stats.books.map(r => `<tr><td>${esc(r.books.split(' + ').map(bn).join(' + '))}</td><td class="n"><b>${r.n}</b></td></tr>`).join('');
+    $('histTable').innerHTML = '<tr><th>Sent</th><th>Match</th><th>Market</th><th>Bets</th><th class="n">Profit</th></tr>' +
+      hist.map(sb => `<tr><td>${dt(sb.firstSeen)}</td><td>${matchHtml(sb)}</td><td>${esc(sb.label)}</td><td>${legsHtml(sb)}</td><td class="n green">${sb.maxProfit.toFixed(2)} %</td></tr>`).join('');
+    $('betsTable').innerHTML = '<tr><th>Time</th><th>Mode</th><th>Status</th><th>Detail</th></tr>' +
+      bets.map(b => `<tr><td>${dt(b.created)}</td><td>${esc(b.mode)}</td><td class="${b.status === 'placed' ? 'green' : b.status === 'filled' ? 'amber' : 'red'}">${esc(b.status)}</td><td class="muted">${esc(b.detail)}</td></tr>`).join('');
+  }
+
+  if (tab === 'log') {
+    const rows = await get('/api/log');
+    const dbg = $('showDebug').checked;
+    $('logBox').innerHTML = rows.filter(r => dbg || r.level !== 'debug').map(r =>
+      `<span class="${r.level === 'error' ? 'red' : r.level === 'warn' ? 'amber' : ''}">${new Date(r.ts).toLocaleTimeString('en-GB')} ${esc(r.level.toUpperCase())} ${esc(r.msg)}</span>`).join('\n');
+  }
+}
+
+async function compareBook(book) {
+  if (!confirm('The comparison uses Odds-API.io requests. Continue?')) return;
+  const r = await post('/api/compare', { book });
+  if (r.error) return alert(r.error);
+  alert(`${r.book}: browser ${r.browser.events} matches (${(r.browser.ms / 1000).toFixed(1)} s) · API ${r.api.events} (${(r.api.ms / 1000).toFixed(1)} s, ${r.api.requests} req)\n` +
+    `Paired: ${r.pairedFixtures} · identical odds ${r.prices.identical}/${r.prices.compared}, avg diff ${r.prices.avgAbsDiff}\n\n${r.samples.join('\n')}`);
+}
+
+async function bet(key, mode) {
+  const r = await post('/api/bet', { key, mode });
+  alert(`${r.status}: ${r.detail || r.error || ''}`);
+}
+
+const FIELDS = ['provider', 'oddsApiIoKey', 'apiHoursAhead', 'oddsApiKey', 'oddsApiRegions', 'oddsApiBookmakers', 'oddsApiMarkets', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct',
+  'bankrollPerBet', 'roundStakeTo', 'includeLive', 'telegramBotToken', 'telegramChatId', 'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'maxOddsDropPct'];
+const NUM = new Set(['apiHoursAhead', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct', 'bankrollPerBet', 'roundStakeTo', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'maxOddsDropPct']);
+const BOOL = new Set(['includeLive', 'autoPrematchOnly']);
+
+async function loadSettings() {
+  settings = await get('/api/settings');
+  $('s-provider').innerHTML = settings.providers.map(p => `<option>${p}</option>`).join('');
+  for (const f of FIELDS) $('s-' + f).value = String(settings[f]);
+  $('s-bookmakers').value = JSON.stringify(settings.bookmakers, null, 2);
+  $('bookToggles').innerHTML = Object.entries(settings.bookmakers).map(([k, b]) =>
+    `<label style="display:flex;gap:6px;align-items:center;color:var(--text)"><input type="checkbox" style="width:auto" ${b.enabled ? 'checked' : ''} onchange="toggleBook('${k}',this.checked)"> ${esc(bn(k))}</label>`).join('');
+  $('s-stakeTiers').value = JSON.stringify(settings.stakeTiers || []);
+  const SP = { football: 'Football', tennis: 'Tennis', hockey: 'Hockey', basketball: 'Basketball', tabletennis: 'Table tennis', esports: 'Esports', volleyball: 'Volleyball', handball: 'Handball' };
+  const on = new Set(settings.scanSports || []);
+  $('scanSports').innerHTML = Object.entries(SP).map(([k, n]) => `<label style="display:flex;gap:6px;align-items:center;color:var(--text);margin-right:12px"><input type="checkbox" class="sport" value="${k}" style="width:auto" ${on.has(k) ? 'checked' : ''}> ${n}</label>`).join('');
+  $('s-dashboardPassword').value = '';
+  sportsSel = new Set(settings.sports || []);
+  $('sportCount').textContent = sportsSel.size;
+  const st = await get('/api/status');
+  $('creditEst').textContent = `Estimated usage: ${st.creditsPerHour} credits/hour (markets × regions × sports × scans).`;
+}
+async function loadSports() {
+  const r = await get('/api/sports');
+  if (r.error) return alert(r.error);
+  $('sportList').innerHTML = r.filter(s => s.active).map(s =>
+    `<label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" style="width:auto" value="${esc(s.key)}" ${sportsSel.has(s.key) ? 'checked' : ''}
+      onchange="this.checked?sportsSel.add(this.value):sportsSel.delete(this.value);$('sportCount').textContent=sportsSel.size"> ${esc(s.group)} · ${esc(s.title)} <span class="muted">${esc(s.key)}</span></label>`).join('');
+}
+function toggleBook(k, on) {
+  try {
+    const b = JSON.parse($('s-bookmakers').value);
+    b[k] = { ...b[k], enabled: on };
+    $('s-bookmakers').value = JSON.stringify(b, null, 2);
+  } catch { alert('Bookmakers: invalid JSON'); loadSettings(); }
+}
+async function saveCap(book, field, v) {
+  const s = await get('/api/settings');
+  const bookmakers = s.bookmakers;
+  bookmakers[book] = { ...bookmakers[book], [field]: Number(v) > 0 ? Number(v) : 0 };
+  await post('/api/settings', { bookmakers });
+  refresh();
+}
+async function saveTg() {
+  // Save the token / chat ID currently typed in the fields before calling the Telegram endpoints.
+  await post('/api/settings', { telegramBotToken: $('s-telegramBotToken').value, telegramChatId: $('s-telegramChatId').value });
+}
+async function saveSettings() {
+  const body = {};
+  for (const f of FIELDS) {
+    let v = $('s-' + f).value;
+    if (NUM.has(f)) v = Number(v);
+    if (BOOL.has(f)) v = v === 'true';
+    body[f] = v;
+  }
+  try { body.bookmakers = JSON.parse($('s-bookmakers').value); } catch { return alert('Bookmakers: invalid JSON'); }
+  try {
+    body.stakeTiers = JSON.parse($('s-stakeTiers').value || '[]');
+    if (!Array.isArray(body.stakeTiers) || body.stakeTiers.some(t => !(t.minProfitPct >= 0) || !(t.stake > 0))) throw 0;
+  } catch { return alert('Stake tiers: invalid JSON, need [{"minProfitPct":2,"stake":10}, ...]'); }
+  body.scanSports = [...document.querySelectorAll('#scanSports .sport:checked')].map(x => x.value);
+  body.sports = [...sportsSel];
+  if ($('s-dashboardPassword').value) body.dashboardPassword = $('s-dashboardPassword').value;
+  const r = await post('/api/settings', body);
+  if (r.error) return alert(r.error);
+  $('saveMsg').textContent = 'Saved'; setTimeout(() => $('saveMsg').textContent = '', 2000);
+  loadSettings();
+}
+boot();
+</script>
+</body>
+</html>
