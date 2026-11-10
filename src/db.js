@@ -30,6 +30,19 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts INTEGER NOT NULL, level TEXT NOT NULL, msg TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS balances (
+    book TEXT NOT NULL, ts INTEGER NOT NULL, amount REAL NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS ix_bal ON balances(book, ts);
+  CREATE TABLE IF NOT EXISTS ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    person TEXT NOT NULL,
+    book TEXT NOT NULL,
+    type TEXT NOT NULL,          -- deposit | withdrawal
+    amount REAL NOT NULL,
+    note TEXT
+  );
 `);
 
 const q = {
@@ -55,7 +68,12 @@ const q = {
   addBet: db.prepare('INSERT INTO bets (surebet_key, created, mode, status, detail) VALUES (?, ?, ?, ?, ?)'),
   setBet: db.prepare('UPDATE bets SET status = ?, detail = ? WHERE id = ?'),
   bets: db.prepare('SELECT * FROM bets ORDER BY id DESC LIMIT ?'),
-  betsSince: db.prepare(`SELECT COUNT(*) AS n FROM bets WHERE created >= ? AND mode = 'auto' AND status IN ('placed','partial')`),
+  betsSince: db.prepare(`SELECT COUNT(*) AS n FROM bets WHERE created >= ? AND mode = 'auto' AND status IN ('placed','partial','unconfirmed')`),
+  addBalance: db.prepare('INSERT INTO balances (book, ts, amount) VALUES (?, ?, ?)'),
+  lastBalances: db.prepare('SELECT b.book, b.ts, b.amount FROM balances b JOIN (SELECT book, MAX(ts) AS ts FROM balances GROUP BY book) m ON m.book = b.book AND m.ts = b.ts'),
+  addLedger: db.prepare('INSERT INTO ledger (ts, person, book, type, amount, note) VALUES (?, ?, ?, ?, ?, ?)'),
+  ledger: db.prepare('SELECT * FROM ledger ORDER BY ts DESC, id DESC'),
+  delLedger: db.prepare('DELETE FROM ledger WHERE id = ?'),
 };
 
 // Returns true when the surebet is new.
@@ -103,4 +121,9 @@ module.exports = {
     const d = new Date(); d.setHours(0, 0, 0, 0);
     return q.betsSince.get(d.getTime()).n;
   },
+  addBalance: (book, amount, ts = Date.now()) => q.addBalance.run(book, ts, amount),
+  lastBalances: () => q.lastBalances.all(),
+  addLedger: (e) => Number(q.addLedger.run(e.ts || Date.now(), e.person, e.book, e.type, e.amount, e.note || '').lastInsertRowid),
+  ledger: () => q.ledger.all(),
+  delLedger: id => q.delLedger.run(id).changes,
 };

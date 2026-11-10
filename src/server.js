@@ -14,6 +14,8 @@ const sites = require('./bettor/sites');
 const notify = require('./notify');
 const analytics = require('./analytics');
 const compare = require('./compare');
+const balances = require('./bettor/balances');
+const money = require('./money');
 const { marketLabel } = require('./arb');
 
 const INDEX = path.join(__dirname, '..', 'public', 'index.html');
@@ -63,7 +65,8 @@ function csv(rows) {
 const SETTABLE = new Set(['provider', 'oddsApiKey', 'oddsApiRegions', 'oddsApiBookmakers', 'oddsApiMarkets', 'sports', 'pollSeconds', 'minCreditsLeft',
   'minProfitPct', 'maxProfitPct', 'maxOddsAgeSec', 'liveSeconds', 'liveMaxAgeSec', 'liveConfirmPolls', 'liveMinProfitPct', 'liveMaxProfitPct', 'includeLive', 'bankrollPerBet', 'stakeTiers', 'roundStakeTo', 'telegramBotToken', 'telegramChatId',
   'scanSports', 'tipsportLimit', 'bet365WaitSec', 'bet365Routes', 'oddsApiIoKey', 'apiHoursAhead', 'apiMaxEventsPerSport',
-  'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'alertSuspect', 'maxOddsDropPct', 'bookmakers', 'dashboardPassword']);
+  'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'alertSuspect', 'maxOddsDropPct', 'bookmakers', 'dashboardPassword',
+  'balanceEverySec', 'lowBalanceAlert']);
 
 async function api(req, res, url) {
   const p = url.pathname;
@@ -89,8 +92,14 @@ async function api(req, res, url) {
   if (p === '/api/status') {
     const prov = providers.get(s.provider);
     const books = {};
+    const bal = balances.snapshot();
+    const siteList = sites.load();
     for (const [k, b] of Object.entries(s.bookmakers)) {
-      books[k] = { ...b, chromeUp: await chrome.isUp(b.port), calibrated: sites.calibrated(sites.load()[k] || {}), launchCommand: chrome.launchCommand(b.port, k) };
+      const sel = (siteList[k] || {}).selectors || {};
+      books[k] = {
+        ...b, chromeUp: await chrome.isUp(b.port), calibrated: sites.calibrated(siteList[k] || {}), launchCommand: chrome.launchCommand(b.port, k),
+        balance: bal[k] || null, balanceCalibrated: !!sel.balance,
+      };
     }
     return send(res, 200, {
       running: scanner.state.running, lastRun: scanner.state.lastRun, lastError: scanner.state.lastError,
@@ -106,6 +115,25 @@ async function api(req, res, url) {
   if (p === '/api/analytics') return send(res, 200, analytics.report(Object.entries(s.bookmakers).filter(([, b]) => b.enabled).map(([k]) => k)));
   if (p === '/api/log') return send(res, 200, db.logTail(Number(url.searchParams.get('n')) || 300));
   if (p === '/api/bets') return send(res, 200, db.bets());
+  if (p === '/api/balances/refresh' && req.method === 'POST') return send(res, 200, await balances.refreshAll(s));
+  if (p === '/api/money' && req.method === 'GET') {
+    const entries = db.ledger();
+    const latest = Object.fromEntries(Object.entries(balances.snapshot()).filter(([, v]) => v.amount != null).map(([k, v]) => [k, v.amount]));
+    return send(res, 200, { entries, balances: balances.snapshot(), summary: money.summary(entries, latest) });
+  }
+  if (p === '/api/money' && req.method === 'POST') {
+    const b = await readBody(req);
+    const amount = Number(b.amount);
+    const person = String(b.person || '').trim().slice(0, 40);
+    if (!person || !s.bookmakers[b.book] || !['deposit', 'withdrawal'].includes(b.type) || !(amount > 0)) return send(res, 400, { error: 'need person, bookmaker, type and an amount above 0' });
+    const id = db.addLedger({ person, book: b.book, type: b.type, amount, note: String(b.note || '').slice(0, 200) });
+    db.log('info', `money: ${person} ${b.type} ${amount} at ${b.book}`);
+    return send(res, 200, { ok: true, id });
+  }
+  if (p === '/api/money/delete' && req.method === 'POST') {
+    const { id } = await readBody(req);
+    return send(res, 200, { ok: db.delLedger(Number(id)) === 1 });
+  }
   if (p === '/api/export.csv') {
     res.setHeader('content-disposition', 'attachment; filename="surebets.csv"');
     return send(res, 200, csv(db.history(100000)), 'text/csv');
@@ -194,5 +222,5 @@ const server = http.createServer(async (req, res) => {
 const s = config.load();
 server.listen(s.port, s.host, () => {
   db.log('info', `dashboard on http://${s.host === '0.0.0.0' ? 'localhost' : s.host}:${s.port} (provider: ${s.provider}, betMode: ${s.betMode})`);
-  if (process.env.AUTOSTART !== '0') scanner.start();
+  if (process.env.AUTOSTART !== '0') { scanner.start(); balances.start(); }
 });

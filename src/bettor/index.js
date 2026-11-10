@@ -21,17 +21,8 @@ function priceTexts(p) {
   const a = p.toFixed(2), b = String(p);
   return [...new Set([a, b, a.replace('.', ','), b.replace('.', ',')])];
 }
-// "1 234,56 €" / "€1,234.56" / "12.5" -> number
-function parseMoney(t) {
-  let x = String(t).replace(/[^\d.,]/g, '');
-  if (!x) return null;
-  const lc = x.lastIndexOf(','), ld = x.lastIndexOf('.');
-  if (lc > -1 && ld > -1) x = lc > ld ? x.replace(/\./g, '').replace(',', '.') : x.replace(/,/g, '');
-  else if (lc > -1) x = /,\d{1,2}$/.test(x) ? x.replace(',', '.') : x.replace(/,/g, '');
-  const n = Number(x);
-  return Number.isFinite(n) ? n : null;
-}
-function parsePrice(t) { const m = String(t).replace(',', '.').match(/\d+\.\d+/); return m ? Number(m[0]) : null; }
+const { parseMoney, parsePrice } = require('./parse');
+const balances = require('./balances');
 
 function legUrl(site, sb, leg) {
   if (leg.link) return leg.link;
@@ -92,12 +83,31 @@ async function prepareLeg(settings, sb, leg) {
   return { leg, page, site, ready: true, note: `stake ${leg.stake} on slip @ ${leg.slipPrice || leg.price}` };
 }
 
+// Polls read() until the balance is at least `stake` below `before`. true = the money left the account.
+async function waitForDrop(read, before, stake, { timeoutMs = 20000, everyMs = 1000 } = {}) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    await sleep(everyMs);
+    const now = await read().catch(() => null);
+    if (now != null && now <= before - stake + 0.01) return true;
+  }
+  return false;
+}
+
+// Returns 'confirmed' or 'unconfirmed' (clicked, but no proof the site took the bet).
 async function placeLeg(p) {
   const S = p.site.selectors;
   await p.page.click(S.placeButton);
-  if (S.placedConfirm) await p.page.waitForSelector(S.placedConfirm, { timeout: 20000 });
-  else await sleep(3000);
-  return true;
+  if (S.placedConfirm) {
+    await p.page.waitForSelector(S.placedConfirm, { timeout: 20000 });
+    return 'confirmed';
+  }
+  if (S.balance && p.leg.balance != null) {
+    const read = async () => parseMoney(await p.page.$eval(S.balance, el => el.innerText));
+    return (await waitForDrop(read, p.leg.balance, p.leg.stake)) ? 'confirmed' : 'unconfirmed';
+  }
+  await sleep(3000);
+  return 'unconfirmed';
 }
 
 function autoAllowed(settings, sb) {
@@ -117,7 +127,9 @@ function applyStakeCaps(settings, sb) {
   for (const l of sb.legs) {
     const bk = settings.bookmakers[l.book] || {};
     // Percentage of the bankroll you keep at this book wins; else the fixed per-bet cap.
-    const pct = Number(bk.bankroll) > 0 && Number(bk.stakePercent) > 0 ? Number(bk.bankroll) * Number(bk.stakePercent) / 100 : 0;
+    // The live balance (read from the logged-in window) replaces the typed-in bankroll.
+    const bankroll = balances.fresh(l.book) ?? Number(bk.bankroll);
+    const pct = bankroll > 0 && Number(bk.stakePercent) > 0 ? bankroll * Number(bk.stakePercent) / 100 : 0;
     const cap = pct || Number(bk.maxStakePerBet);
     if (!(cap > 0)) return { error: `${l.book}: set bankroll + stake % (or a max stake per bet) for auto` };
     factor = Math.min(factor, cap / l.stake);
@@ -197,13 +209,18 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
     }
     notify.send(settings, `Balances OK (${ok.map(p => `${p.leg.book} ${p.leg.balance}`).join(', ')}), odds hold, placing all legs now: ${title}`).catch(() => { });
     const placed = await Promise.allSettled(ok.map(placeLeg));
-    const good = placed.filter(r => r.status === 'fulfilled').length;
-    const status = good === ok.length ? 'placed' : good === 0 ? 'failed' : 'partial';
-    const detail = placed.map((r, i) => `${ok[i].leg.book}: ${r.status === 'fulfilled' ? 'PLACED' : 'FAILED ' + r.reason.message}`).join(' | ');
+    const status = placedStatus(placed.map(r => (r.status === 'fulfilled' ? r.value : 'failed')));
+    const detail = placed.map((r, i) => `${ok[i].leg.book}: ${r.status === 'fulfilled' ? (r.value === 'confirmed' ? 'PLACED' : 'CLICKED, NOT CONFIRMED') : 'FAILED ' + r.reason.message}`).join(' | ');
     db.setBet(betId, status, detail);
     db.log(status === 'placed' ? 'info' : 'error', `[auto] ${title}: ${detail}`);
-    const head = status === 'partial' ? 'WARNING: only part of the bet was placed, you hold an open position!' : status === 'placed' ? 'Placed' : 'Failed';
+    const head = {
+      placed: 'Placed',
+      partial: 'WARNING: only part of the bet was placed, you hold an open position!',
+      unconfirmed: 'CHECK NOW: Place was clicked but not every leg is confirmed. Look at the bet history in each window.',
+      failed: 'Failed',
+    }[status];
     notify.send(settings, `${head}\n${title}\n${detail}`).catch(() => { });
+    balances.refreshAll(settings).catch(() => { });
     return { status, detail };
   } catch (e) {
     db.setBet(betId, 'failed', e.message);
@@ -214,4 +231,13 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
   }
 }
 
-module.exports = { execute, applyStakeCaps, stillProfitable, parseMoney };
+// Leg results ('confirmed' | 'unconfirmed' | 'failed') -> one status for the whole surebet.
+function placedStatus(legs) {
+  const n = k => legs.filter(x => x === k).length;
+  if (n('confirmed') === legs.length) return 'placed';
+  if (n('failed') === legs.length) return 'failed';
+  if (n('failed') > 0) return 'partial';
+  return 'unconfirmed';
+}
+
+module.exports = { execute, applyStakeCaps, stillProfitable, parseMoney, waitForDrop, placedStatus };

@@ -72,4 +72,15 @@ function calibrated(site) {
   return !!(s.oddsButton && s.stakeInput && s.placeButton);
 }
 
-module.exports = { load, calibrated };
+// Merge new selectors for one book into data/sites.json (scripts/calibrate.js).
+function save(book, selectors) {
+  const file = path.join(DATA_DIR, 'sites.json');
+  let all = {};
+  try { all = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')); } catch { }
+  const prev = all[book] || {};
+  all[book] = { ...prev, selectors: { ...(prev.selectors || {}), ...selectors }, calibratedAt: new Date().toISOString() };
+  fs.writeFileSync(file, JSON.stringify(all, null, 2));
+  return all[book];
+}
+
+module.exports = { load, calibrated, save };

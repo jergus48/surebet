@@ -79,7 +79,8 @@
       <p class="muted" id="statusLine">Loading status…</p>
     </div>
     <div class="card">
-      <h3 style="margin-top:0">Bookmakers (each in its own Chrome window)</h3>
+      <div class="row"><h3 style="margin:0">Bookmakers (each in its own Chrome window)</h3><span style="flex:1"></span>
+        <button class="btn" onclick="post('/api/balances/refresh').then(refresh)">Read balances now</button></div>
       <div id="books"></div>
     </div>
   </section>
@@ -89,6 +90,21 @@
   </section>
 
   <section id="t-history" class="hidden">
+    <div class="card">
+      <h3 style="margin-top:0">Money</h3>
+      <div class="grid" id="moneyKpis"></div>
+      <div class="scroll" style="margin-top:10px"><table id="moneyPeople"></table></div>
+      <p class="muted" id="moneyNote"></p>
+      <div class="form" style="margin-top:10px">
+        <div><label>Person</label><input id="m-person" list="m-people" placeholder="your name"><datalist id="m-people"></datalist></div>
+        <div><label>Bookmaker</label><select id="m-book"></select></div>
+        <div><label>Type</label><select id="m-type"><option value="deposit">deposit</option><option value="withdrawal">withdrawal</option></select></div>
+        <div><label>Amount (€)</label><input id="m-amount" type="number" min="0" step="0.01"></div>
+        <div><label>Note</label><input id="m-note" placeholder="optional"></div>
+      </div>
+      <div class="row" style="margin-top:8px"><button class="btn primary" onclick="addMoney()">Add</button><span id="moneyErr" class="red"></span></div>
+      <div class="scroll" style="margin-top:10px"><table id="moneyTable"></table></div>
+    </div>
     <div class="card row">
       <a href="/api/export.csv"><button class="btn">⬇️ Download CSV</button></a>
     </div>
@@ -165,7 +181,10 @@
         <div><label>Auto: pre-match only</label><select id="s-autoPrematchOnly"><option value="true">yes</option><option value="false">no</option></select></div>
         <div><label>Telegram alerts for suspect surebets (stale-looking leg)</label><select id="s-alertSuspect"><option value="false">no (history only)</option><option value="true">yes</option></select></div>
         <div><label>Max. odds drop on slip %</label><input id="s-maxOddsDropPct" type="number" step="0.1"></div>
+        <div><label>Read balances every (s)</label><input id="s-balanceEverySec" type="number" min="60"></div>
+        <div><label>Low balance warning below (€, 0 = off)</label><input id="s-lowBalanceAlert" type="number" min="0"></div>
       </div>
+      <p class="muted">Balances, odds buttons, the stake box and Place are taught per bookmaker with <code>node scripts/calibrate.js &lt;book&gt;</code> (see README). Until then a book only opens the match.</p>
       <h4>Bookmakers</h4>
       <div id="bookToggles" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px"></div>
       <textarea id="s-bookmakers" rows="7" style="font-family:monospace"></textarea>
@@ -227,6 +246,41 @@ function legsHtml(sb) {
     return `<div>${name} <b>${esc(l.sel)}</b> @ ${l.price} · ${l.stake}${fast}</div>`;
   }).join('') + '</div>';
 }
+function balanceHtml(b) {
+  if (!b.balanceCalibrated) return '<span class="muted">balance: not calibrated</span>';
+  const x = b.balance || {};
+  if (x.amount == null) return `<span class="amber">balance: ${esc(x.error || 'not read yet')}</span>`;
+  const old = Date.now() - x.at > 15 * 60 * 1000;
+  return `<span class="${old ? 'amber' : 'green'}" title="read ${dt(x.at)}${x.error ? ' · last try: ' + esc(x.error) : ''}">balance ${x.amount.toFixed(2)} €${old ? ' (old)' : ''}</span>`;
+}
+const eur = n => (n == null ? '–' : `${n < 0 ? '−' : ''}${Math.abs(n).toFixed(2)} €`);
+const sign = n => (n == null ? '' : n >= 0 ? 'green' : 'red');
+async function loadMoney(st) {
+  const m = await get('/api/money');
+  const s = m.summary;
+  $('moneyKpis').innerHTML = [['Deposited', eur(s.deposited)], ['Withdrawn', eur(s.withdrawn)], ['In the books now', eur(s.held)], ['Profit', eur(s.profit)]]
+    .map(([l, v]) => `<div class="kpi"><div class="v ${l === 'Profit' ? sign(s.profit) : ''}">${v}</div><div class="l">${l}</div></div>`).join('');
+  const people = Object.entries(s.people);
+  $('moneyPeople').innerHTML = people.length ? '<tr><th>Person</th><th class="n">Deposited</th><th class="n">Withdrawn</th><th class="n">Share</th><th class="n">Still in books</th><th class="n">Profit</th></tr>' +
+    people.map(([n, p]) => `<tr><td>${esc(n)}</td><td class="n">${eur(p.deposited)}</td><td class="n">${eur(p.withdrawn)}</td><td class="n">${p.sharePct} %</td><td class="n">${eur(p.inBooks)}</td><td class="n ${sign(p.profit)}">${eur(p.profit)}</td></tr>`).join('') : '';
+  $('moneyNote').textContent = (s.missingBalances.length ? `No balance read yet for ${s.missingBalances.map(bn).join(', ')}, so profit is unknown until every book with money in it has been read. ` : '') +
+    'Profit = balances now + withdrawn − deposited. Stakes on bets that have not settled yet are missing from the balances, so profit dips until they settle.';
+  $('m-people').innerHTML = [...new Set(m.entries.map(e => e.person))].map(p => `<option value="${esc(p)}">`).join('');
+  if (!$('m-book').options.length) $('m-book').innerHTML = Object.entries(st.books).filter(([, b]) => b.enabled).map(([k, b]) => `<option value="${esc(k)}">${esc(b.name)}</option>`).join('');
+  $('moneyTable').innerHTML = '<tr><th>Date</th><th>Person</th><th>Bookmaker</th><th>Type</th><th class="n">Amount</th><th>Note</th><th></th></tr>' +
+    (m.entries.length ? m.entries.map(e => `<tr><td>${dt(e.ts)}</td><td>${esc(e.person)}</td><td>${esc(bn(e.book))}</td><td>${esc(e.type)}</td><td class="n ${e.type === 'deposit' ? '' : 'amber'}">${eur(e.amount)}</td><td class="muted">${esc(e.note)}</td>
+      <td><button class="btn" onclick="delMoney(${Number(e.id)})">Delete</button></td></tr>`).join('') : '<tr><td colspan="7" class="muted">No deposits recorded yet.</td></tr>');
+}
+async function addMoney() {
+  const r = await post('/api/money', { person: $('m-person').value, book: $('m-book').value, type: $('m-type').value, amount: Number($('m-amount').value), note: $('m-note').value });
+  $('moneyErr').textContent = r.error || '';
+  if (!r.error) { $('m-amount').value = ''; $('m-note').value = ''; refresh(); }
+}
+async function delMoney(id) {
+  if (!confirm('Delete this entry?')) return;
+  await post('/api/money/delete', { id });
+  refresh();
+}
 function matchHtml(sb) {
   return `${esc(sb.home)} – ${esc(sb.away)}${sb.live ? '<span class="tag">LIVE</span>' : ''}<div class="muted">${esc(sb.league)} · ${dt(sb.start)}</div>`;
 }
@@ -259,6 +313,7 @@ async function refresh() {
           ${bs[k] ? `<span class="${bs[k].ok ? 'green' : 'red'}">${bs[k].ok ? `${bs[k].events} matches · ${(bs[k].ms / 1000).toFixed(1)} s` : esc(bs[k].error)}</span>` : ''}
           <span class="${b.chromeUp ? 'green' : 'muted'}">Chrome :${b.port} ${b.chromeUp ? 'running' : 'not running'}</span>
           <span class="${b.calibrated ? 'green' : 'amber'}">${b.calibrated ? 'calibrated' : 'not calibrated (only opens the match)'}</span>
+          ${balanceHtml(b)}
           <span style="flex:1"></span>
           <label style="margin:0;display:flex;gap:6px;align-items:center" title="Money you keep at this bookmaker.">Bankroll
             <input type="number" min="0" style="width:80px" value="${b.bankroll || ''}" placeholder="not set" onchange="saveCap('${k}', 'bankroll', this.value)"></label>
@@ -284,6 +339,7 @@ async function refresh() {
   }
 
   if (tab === 'history') {
+    if (!document.querySelector('#t-history .form').contains(document.activeElement)) await loadMoney(st);
     const [stats, hist, bets, an] = await Promise.all([get('/api/stats'), get('/api/history'), get('/api/bets'), get('/api/analytics')]);
     $('anTitle').textContent = `Combination study: ${an.days} of ${an.studyDays} days, ${an.observations} surebets seen (from ${an.studyMinPct}%)`;
     $('anNote').textContent = an.ready ? 'Study finished: books marked REMOVE never took part in any surebet.' : 'Still collecting. Verdicts appear after 7 days of running. Counts include near-misses from 0.5% profit.';
@@ -299,7 +355,7 @@ async function refresh() {
     $('histTable').innerHTML = '<tr><th>Sent</th><th>Match</th><th>Market</th><th>Bets</th><th class="n">Profit</th></tr>' +
       hist.map(sb => `<tr><td>${dt(sb.firstSeen)}</td><td>${matchHtml(sb)}</td><td>${esc(sb.label)}</td><td>${legsHtml(sb)}</td><td class="n green">${sb.maxProfit.toFixed(2)} %</td></tr>`).join('');
     $('betsTable').innerHTML = '<tr><th>Time</th><th>Mode</th><th>Status</th><th>Detail</th></tr>' +
-      bets.map(b => `<tr><td>${dt(b.created)}</td><td>${esc(b.mode)}</td><td class="${b.status === 'placed' ? 'green' : b.status === 'filled' ? 'amber' : 'red'}">${esc(b.status)}</td><td class="muted">${esc(b.detail)}</td></tr>`).join('');
+      bets.map(b => `<tr><td>${dt(b.created)}</td><td>${esc(b.mode)}</td><td class="${b.status === 'placed' ? 'green' : b.status === 'filled' || b.status === 'unconfirmed' ? 'amber' : 'red'}">${esc(b.status)}</td><td class="muted">${esc(b.detail)}</td></tr>`).join('');
   }
 
   if (tab === 'log') {
@@ -324,8 +380,10 @@ async function bet(key, mode) {
 }
 
 const FIELDS = ['provider', 'oddsApiIoKey', 'apiHoursAhead', 'oddsApiKey', 'oddsApiRegions', 'oddsApiBookmakers', 'oddsApiMarkets', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct',
-  'bankrollPerBet', 'roundStakeTo', 'includeLive', 'telegramBotToken', 'telegramChatId', 'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'alertSuspect', 'maxOddsDropPct'];
-const NUM = new Set(['apiHoursAhead', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct', 'bankrollPerBet', 'roundStakeTo', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'maxOddsDropPct']);
+  'bankrollPerBet', 'roundStakeTo', 'includeLive', 'telegramBotToken', 'telegramChatId', 'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'alertSuspect', 'maxOddsDropPct',
+  'balanceEverySec', 'lowBalanceAlert'];
+const NUM = new Set(['apiHoursAhead', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct', 'bankrollPerBet', 'roundStakeTo', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'maxOddsDropPct',
+  'balanceEverySec', 'lowBalanceAlert']);
 const BOOL = new Set(['includeLive', 'autoPrematchOnly', 'alertSuspect']);
 
 async function loadSettings() {

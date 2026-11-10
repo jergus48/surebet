@@ -94,24 +94,34 @@ The Surebety tab has an **Otvoriť** button per row that runs `fill` for that su
 
 1. Overview tab > **Otvoriť okno** next to the bookmaker (or run the shown command).
 2. Log in by hand in that window. The login stays in `~/surebet-profiles/chrome-<book>`.
-3. Calibrate selectors: copy `src/bettor/sites.js` field names into
-   `data/sites.json`, e.g.
+3. Calibrate: `node scripts/calibrate.js <book>` (e.g. `tipsport`). It opens a new tab in
+   that book's window and asks you to click, one by one: your **balance**, any **odds**
+   button (it goes onto the slip), the **stake box**, the **slip odds** and the **Place**
+   button. The Place click is blocked, so calibrating never bets. It keeps only stable
+   selectors (data attributes, readable classes; never hashed ones like `sc-b8dd6735-3`)
+   and saves them to `data/sites.json`. Clear the bet slip by hand afterwards.
+   - `--check` shows what the saved selectors find on the current page.
+   - `--from tipsport` copies another book's selectors first (Chance runs on the same
+     platform as Tipsport), then checks them.
+   - Rerun it when a site changes its layout and a step stops working.
 
-```json
-{
-  "tipsport": {
-    "search": "https://www.tipsport.sk/...?q={q}",
-    "selectors": {
-      "loggedIn": "...", "oddsButton": "...", "stakeInput": "...",
-      "slipOdds": "...", "placeButton": "...", "placedConfirm": "..."
-    }
-  }
-}
-```
-
-Get each selector in the logged-in window: DevTools > right-click element > Copy > Copy selector.
 Until `oddsButton`, `stakeInput` and `placeButton` are set, the book shows as
-"nekalibrovaná" and the bot only opens the event and tells you the stake.
+"not calibrated" and the bot only opens the event and tells you the stake.
+
+### Balances, bet confirmation and money
+
+- **Balances**: with the `balance` selector set, the bot reads each logged-in book's
+  balance every `balanceEverySec` (300 s) and on "Read balances now". The Overview shows
+  it, stake caps (`stakePercent`) use it instead of the typed bankroll, and Telegram warns
+  once per 12 h when a book drops below `lowBalanceAlert` (15 €).
+- **Confirmation**: after clicking Place the bot waits up to 20 s for the balance to fall
+  by the stake (or for `placedConfirm` if you set one). A leg it cannot confirm is
+  reported as `unconfirmed`: check that book's bet history by hand.
+- **Money** (History tab): record every deposit and withdrawal with the person and book.
+  Profit = balances now + withdrawn − deposited, split by each person's share of the
+  deposits. Stakes on unsettled bets are not in any balance, so profit dips until they settle.
+- **Test before real money**: with a book calibrated, use the **Open** button on the
+  Surebets tab (mode `fill`): it puts the stake on every slip and stops before Place.
 
 ### Risks to know
 
@@ -130,6 +140,10 @@ src/arb.js            surebet math (2-way, 3-way, totals, spreads) + stake split
 src/providers/        mock, oddsapi
 src/bettor/chrome.js  per-book debug Chrome (launch/connect over CDP)
 src/bettor/sites.js   per-book URLs + selectors (override in data/sites.json)
+src/bettor/balances.js  live balance per book, low-balance alerts
+src/bettor/selectors.js stable-selector rules for calibration (picker.js runs in the page)
+src/money.js          deposits/withdrawals -> profit per person
+scripts/calibrate.js  interactive per-book calibration
 src/bettor/index.js   open/fill/place executor with limits
 src/notify.js         Telegram
 public/index.html     UI

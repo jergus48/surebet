@@ -62,6 +62,8 @@ const DEFAULTS = {
   alertSuspect: false, // Telegram alerts for surebets with a stale-looking leg (never auto-bet either way)
   autoPrematchOnly: true,
   maxOddsDropPct: 0.0, // abort a leg if slip odds are lower than scanned odds by more than this
+  balanceEverySec: 300, // read each logged-in book's balance this often (needs the balance selector)
+  lowBalanceAlert: 15, // Telegram warning when a book's balance falls below this; 0 = off
   bookmakers: {
     // port = its own debug Chrome. source = 'browser' (read its window) or 'api' (Odds-API.io).
     // apiName = the book's name on Odds-API.io (for source 'api' and the compare tool).
