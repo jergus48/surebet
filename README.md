@@ -43,6 +43,19 @@ Every leg in the dashboard and in Telegram links to that match on that bookmaker
 6. Telegram: Nastavenia > Telegram: paste the @BotFather token, Save, send your bot "hi",
    click "Zistiť chat ID", then "Test".
 
+### Start betting on the Mac (after `bash scripts/mac/update.sh`)
+
+All seven betting books ship calibrated (Tipsport, Chance, Niké, DOXXbet, Tipos, Synottip,
+Megawin MK), so there is no calibrating to do. Once:
+
+1. Nastavenia > Bookmakers: tick the books you have accounts at, Save. Provider: `browser`.
+2. Overview > **Open window (log in)** next to each book, log in by hand in that window, leave it
+   open. Megawin: if it asks for the PIN (last four digits of the ЕМБГ), type it in that window.
+3. Overview > **Read balances now**: every book should show its balance (Megawin in € and МКД).
+4. Nastavenia > Automatické stávkovanie: mode **fill**, Save. Then Start. Each new surebet fills
+   the slips in the windows; check each and click Place yourself. Switch to **auto** only after a
+   few fill bets went through cleanly (and check each book's bet history after the first ones).
+
 Log: `tail -f data/bot.log`. Restart: `launchctl kickstart -k gui/$(id -u)/com.surebet.bot`.
 Remove: `bash scripts/mac/uninstall.sh`. The bookmaker Chrome windows open on the Mac's
 screen (one per bookmaker); leave them open. Logins are only needed for placing bets.
@@ -92,9 +105,11 @@ The Surebety tab has an **Otvoriť** button per row that runs `fill` for that su
 
 ### One-time setup per bookmaker
 
-1. Overview tab > **Otvoriť okno** next to the bookmaker (or run the shown command).
+1. Overview tab > **Open window (log in)** next to the bookmaker (or run the shown command).
 2. Log in by hand in that window. The login stays in `~/surebet-profiles/chrome-<book>`.
-3. Calibrate: `node scripts/calibrate.js <book>` (e.g. `tipsport`). It opens a new tab in
+3. Calibrate: Overview tab > **Calibrate** next to the bookmaker (the panel at the top
+   walks you through it, with Keep / Click again / Skip per step), or in a terminal
+   `node scripts/calibrate.js <book>` (e.g. `tipsport`). It opens a new tab in
    that book's window and asks you to click, one by one: your **balance**, any **odds**
    button (it goes onto the slip), the **stake box**, the **slip odds** and the **Place**
    button. The Place click is blocked, so calibrating never bets. It keeps only stable
@@ -102,11 +117,27 @@ The Surebety tab has an **Otvoriť** button per row that runs `fill` for that su
    and saves them to `data/sites.json`. Clear the bet slip by hand afterwards.
    - `--check` shows what the saved selectors find on the current page.
    - `--from tipsport` copies another book's selectors first (Chance runs on the same
-     platform as Tipsport), then checks them.
+     platform as Tipsport, Synottip on the same as Tipos), then checks them. In the
+     dashboard panel this is "Copy and check".
    - Rerun it when a site changes its layout and a step stops working.
 
 Until `oddsButton`, `stakeInput` and `placeButton` are set, the book shows as
 "not calibrated" and the bot only opens the event and tells you the stake.
+
+Tipsport, Chance, Tipos, Synottip, Niké and DOXXbet ship calibrated (tested 2026-11-10 by filling
+real slips without placing). Before the bot touches a slip it checks: logged in, balance covers
+the stake, slip empty, then after clicking: exactly one selection, the right match, price within
+5 % of the scan, stake box shows exactly the stake, and the Place button is in €; stake and €
+are checked again right before Place. Any miss stops that leg. Chance's slip has a € / G switch
+(G = Goldeny bonus coins) that opens on G: the bot clicks € itself and refuses anything else.
+
+**Megawin MK** (port 9332, filled a real slip 2026-11-10 without placing) is in denars: stakes are
+planned in € and converted with `fx.MKD` (61.5, the peg) to whole denars, the balance is stored
+in € (the dashboard also shows the МКД amount), and the Place button must read МКД. Its stake box
+is an on-screen number pad, its slip collapses to a bar the bot expands, and it closes the cookie
+notice with its X (never accepts) on every page. megawin.mk/sport redirects to the homepage from
+outside North Macedonia, so only the homepage's featured matches can be bet from there. Megawin
+has no odds reader yet, so it is not in surebets.
 
 ### Balances, bet confirmation and money
 
@@ -143,7 +174,8 @@ src/bettor/sites.js   per-book URLs + selectors (override in data/sites.json)
 src/bettor/balances.js  live balance per book, low-balance alerts
 src/bettor/selectors.js stable-selector rules for calibration (picker.js runs in the page)
 src/money.js          deposits/withdrawals -> profit per person
-scripts/calibrate.js  interactive per-book calibration
+src/bettor/calibration.js  calibration steps + dashboard session
+scripts/calibrate.js  the same calibration in a terminal
 src/bettor/index.js   open/fill/place executor with limits
 src/notify.js         Telegram
 public/index.html     UI

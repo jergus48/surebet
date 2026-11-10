@@ -15,6 +15,7 @@ const notify = require('./notify');
 const analytics = require('./analytics');
 const compare = require('./compare');
 const balances = require('./bettor/balances');
+const calibration = require('./bettor/calibration');
 const money = require('./money');
 const { marketLabel } = require('./arb');
 
@@ -116,6 +117,17 @@ async function api(req, res, url) {
   if (p === '/api/log') return send(res, 200, db.logTail(Number(url.searchParams.get('n')) || 300));
   if (p === '/api/bets') return send(res, 200, db.bets());
   if (p === '/api/balances/refresh' && req.method === 'POST') return send(res, 200, await balances.refreshAll(s));
+  // Dashboard calibration (same flow as scripts/calibrate.js).
+  if (p === '/api/calibrate' && req.method === 'GET') return send(res, 200, calibration.view());
+  if (p.startsWith('/api/calibrate/') && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      if (p === '/api/calibrate/start') return send(res, 200, await calibration.start(s, body.book));
+      if (p === '/api/calibrate/act') return send(res, 200, await calibration.act(body.action));
+      if (p === '/api/calibrate/copy') return send(res, 200, await calibration.copyFrom(body.from));
+      if (p === '/api/calibrate/cancel') return send(res, 200, await calibration.cancel());
+    } catch (e) { return send(res, 400, { error: e.message }); }
+  }
   if (p === '/api/money' && req.method === 'GET') {
     const entries = db.ledger();
     const latest = Object.fromEntries(Object.entries(balances.snapshot()).filter(([, v]) => v.amount != null).map(([k, v]) => [k, v.amount]));

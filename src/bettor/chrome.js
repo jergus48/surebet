@@ -35,6 +35,7 @@ function launchArgs(port, bookKey) {
     '--disable-renderer-backgrounding',
     '--no-first-run', '--no-default-browser-check',
     '--hide-crash-restore-bubble', // no "Restore pages?" popup after an unclean shutdown
+    '--disable-features=Translate', // auto-translate rewrites names, prices and the page structure the bot reads
   ];
 }
 

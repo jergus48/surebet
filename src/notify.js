@@ -5,7 +5,7 @@ const { marketLabel } = require('./arb');
 
 const BOOK_NAMES = {
   tipsport: 'Tipsport', bet365: 'Bet365', pinnacle: 'Pinnacle', fortuna: 'Fortuna', nike: 'Niké', doxxbet: 'DOXXbet',
-  tipos: 'Tipos', synottip: 'Synottip', chance: 'Chance', stake: 'Stake', olybet: 'OlyBet', inbet: 'Inbet', maxbet: 'Maxbet MK', mozzart: 'Mozzart MK',
+  tipos: 'Tipos', synottip: 'Synottip', chance: 'Chance', stake: 'Stake', olybet: 'OlyBet', inbet: 'Inbet', maxbet: 'Maxbet MK', mozzart: 'Mozzart MK', megawin: 'Megawin MK',
 };
 const bookName = k => BOOK_NAMES[k] || k;
 

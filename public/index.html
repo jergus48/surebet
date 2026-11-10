@@ -78,6 +78,7 @@
       </div>
       <p class="muted" id="statusLine">Loading status…</p>
     </div>
+    <div class="card hidden" id="calCard" style="border-color:#ff00c8"></div>
     <div class="card">
       <div class="row"><h3 style="margin:0">Bookmakers (each in its own Chrome window)</h3><span style="flex:1"></span>
         <button class="btn" onclick="post('/api/balances/refresh').then(refresh)">Read balances now</button></div>
@@ -202,7 +203,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const BOOK = { tipsport: 'Tipsport', bet365: 'Bet365', pinnacle: 'Pinnacle', fortuna: 'Fortuna', nike: 'Niké', doxxbet: 'DOXXbet', tipos: 'Tipos', synottip: 'Synottip', chance: 'Chance', stake: 'Stake', olybet: 'OlyBet', inbet: 'Inbet', maxbet: 'Maxbet MK', mozzart: 'Mozzart MK' };
+const BOOK = { tipsport: 'Tipsport', bet365: 'Bet365', pinnacle: 'Pinnacle', fortuna: 'Fortuna', nike: 'Niké', doxxbet: 'DOXXbet', tipos: 'Tipos', synottip: 'Synottip', chance: 'Chance', stake: 'Stake', olybet: 'OlyBet', inbet: 'Inbet', maxbet: 'Maxbet MK', mozzart: 'Mozzart MK', megawin: 'Megawin MK' };
 const bn = k => BOOK[k] || k;
 const dt = ms => ms ? new Date(ms).toLocaleString('en-GB', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 let tab = 'overview', settings = null, sportsSel = new Set();
@@ -246,12 +247,67 @@ function legsHtml(sb) {
     return `<div>${name} <b>${esc(l.sel)}</b> @ ${l.price} · ${l.stake}${fast}</div>`;
   }).join('') + '</div>';
 }
+// ---- calibration panel (Overview) ----
+let calTimer = null, calBooks = {};
+async function calStart(book) {
+  $('calCard').classList.remove('hidden');
+  $('calCard').innerHTML = `<b>Calibrating ${esc(bn(book))}</b><p class="muted">Opening its window…</p>`;
+  window.scrollTo(0, 0);
+  const r = await post('/api/calibrate/start', { book });
+  if (r.error) return alert(r.error);
+  calRender(r); calPoll();
+}
+async function calAct(action) { calRender(await post('/api/calibrate/act', { action })); calPoll(); }
+async function calCopy() {
+  const from = $('calFrom').value;
+  if (!from) return;
+  const r = await post('/api/calibrate/copy', { from });
+  if (r.error) return alert(r.error);
+  calRender(r);
+}
+async function calCancel() { await post('/api/calibrate/cancel'); clearTimeout(calTimer); $('calCard').classList.add('hidden'); refresh(); }
+function calPoll() {
+  clearTimeout(calTimer);
+  calTimer = setTimeout(async () => {
+    const v = await get('/api/calibrate');
+    calRender(v);
+    if (v.active && ['opening', 'picking'].includes(v.phase)) calPoll();
+  }, 1000);
+}
+function calRender(v) {
+  const card = $('calCard');
+  if (!v.active) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  const head = `<div class="row"><b>Calibrating ${esc(bn(v.book))}</b><span class="muted">step ${Math.min(v.step, v.steps)} of ${v.steps}</span><span style="flex:1"></span><button class="btn danger" onclick="calCancel()">${v.phase === 'done' ? 'Close' : 'Cancel'}</button></div>`;
+  const done = Object.entries(v.chosen).map(([k, s]) => `<div class="muted">✓ ${esc(k)}: <code>${esc(s)}</code></div>`).join('');
+  let body = '';
+  if (v.phase === 'opening') body = '<p class="muted">Opening its window…</p>';
+  if (v.phase === 'error') body = `<p class="red">${esc(v.message)}</p>`;
+  if (v.phase === 'login') {
+    const others = Object.entries(calBooks).filter(([k, b]) => k !== v.book && b.calibrated);
+    body = `<p>${esc(v.message)}</p><div class="row"><button class="btn primary" onclick="calAct('ready')">I'm logged in, start</button>` +
+      (others.length ? `<span class="muted">or start from a calibrated site on the same platform:</span><select id="calFrom" style="width:auto">${others.map(([k]) => `<option value="${esc(k)}">${esc(bn(k))}</option>`).join('')}</select><button class="btn" onclick="calCopy()">Copy and check</button>` : '') + '</div>';
+    if (v.check) body += `<p class="muted">${esc(v.message)}</p><table>${Object.entries(v.check).map(([k, c]) => `<tr><td>${esc(k)}</td><td class="${c.count ? 'green' : 'amber'}">${c.missing ? 'not set' : c.error ? esc(c.error) : `${c.count} found ${esc((c.sample || []).join(' · '))}`}</td></tr>`).join('')}</table>`;
+  }
+  if (v.phase === 'picking') body = `<p style="font-size:17px"><b>In the ${esc(bn(v.book))} window:</b> ${esc(v.instruction)}</p><p class="muted">Waiting for your click… The window shows a pink frame around what you point at.</p>
+    <div class="row"><button class="btn" onclick="calAct('skip')">Skip this step</button></div>`;
+  if (v.phase === 'review') {
+    const p = v.pending;
+    body = `<p>${esc(v.instruction)}</p>` + (p.selector
+      ? `<p>Found <code>${esc(p.selector)}</code> · ${p.count} on the page${p.show ? ' · ' + esc(p.show) : ''}${p.ok ? '' : ` · <span class="amber">shows "${esc(p.text)}", which does not look right</span>`}</p>
+         <div class="row"><button class="btn primary" onclick="calAct('keep')">Keep</button><button class="btn" onclick="calAct('redo')">Click again</button><button class="btn" onclick="calAct('skip')">Skip</button></div>`
+      : `<p class="amber">No stable selector for that element ("${esc(p.text)}"). Try clicking it, or the element just around it, again.</p>
+         <div class="row"><button class="btn primary" onclick="calAct('redo')">Click again</button><button class="btn" onclick="calAct('skip')">Skip</button></div>`);
+  }
+  if (v.phase === 'done') body = `<p class="${/calibrated/.test(v.message) ? 'green' : 'amber'}">${esc(v.message)}</p>`;
+  card.innerHTML = head + body + done;
+}
 function balanceHtml(b) {
   if (!b.balanceCalibrated) return '<span class="muted">balance: not calibrated</span>';
   const x = b.balance || {};
   if (x.amount == null) return `<span class="amber">balance: ${esc(x.error || 'not read yet')}</span>`;
   const old = Date.now() - x.at > 15 * 60 * 1000;
-  return `<span class="${old ? 'amber' : 'green'}" title="read ${dt(x.at)}${x.error ? ' · last try: ' + esc(x.error) : ''}">balance ${x.amount.toFixed(2)} €${old ? ' (old)' : ''}</span>`;
+  return `<span class="${old ? 'amber' : 'green'}" title="read ${dt(x.at)}${x.error ? ' · last try: ' + esc(x.error) : ''}">balance ${x.amount.toFixed(2)} €${x.currency ? ` (${x.local} ${esc(x.currency)})` : ''}${old ? ' (old)' : ''}</span>`;
 }
 const eur = n => (n == null ? '–' : `${n < 0 ? '−' : ''}${Math.abs(n).toFixed(2)} €`);
 const sign = n => (n == null ? '' : n >= 0 ? 'green' : 'red');
@@ -305,6 +361,8 @@ async function refresh() {
       `<br><b>Live scan</b> (every ~15 s): ${ago(lv.lastRun)}` + (lv.lastError ? ` · <span class="red">${esc(lv.lastError)}</span>` : ' · <span class="green">OK</span>') +
       `<br>Bookmaker windows do not move while reading; the bot reads them in the background.`;
     const bs = (st.credits && st.credits.books) || {};
+    calBooks = st.books;
+    if (!calTimer) get('/api/calibrate').then(v => { if (v.active) { calRender(v); if (['opening', 'picking'].includes(v.phase)) calPoll(); } });
     if (!$('books').contains(document.activeElement)) $('books').innerHTML = Object.entries(st.books).map(([k, b]) => `
       <div style="padding:8px 0;border-bottom:1px solid var(--line)">
         <div class="row"><b>${esc(b.name)}</b>
@@ -322,7 +380,8 @@ async function refresh() {
           <label style="margin:0;display:flex;gap:6px;align-items:center" title="Fixed cap per bet, used when bankroll or % is not set. Auto-betting is blocked for a book with neither.">or max
             <input type="number" min="0" style="width:70px" value="${b.maxStakePerBet || ''}" placeholder="not set" onchange="saveCap('${k}', 'maxStakePerBet', this.value)"></label>
           ${b.apiName ? `<button class="btn" onclick="compareBook('${k}')">Compare browser vs API</button>` : ''}
-          <button class="btn" onclick="post('/api/chrome/${k}/launch').then(r=>{if(r.error)alert(r.error);refresh()})">Open window</button>
+          <button class="btn" onclick="post('/api/chrome/${k}/launch').then(r=>{if(r.error)alert(r.error);refresh()})">Open window (log in)</button>
+          <button class="btn" onclick="calStart('${k}')">Calibrate</button>
         </div>
         <div class="muted" style="margin-top:4px">Log in once by hand in that window; the login stays in the profile. Command: <code>${esc(b.launchCommand)}</code></div>
       </div>`).join('');

@@ -16,14 +16,16 @@ const DEFAULTS = {
     domain: /tipsport\.(sk|cz)/,
     // {q} = url-encoded "home away". Verify this path on the site.
     search: null,
+    // Calibrated 2026-11-10 on a logged-in tipsport.sk account: filled a real match slip
+    // (price, stake, slip odds) without placing. Rerun Calibrate if a step stops working.
     selectors: {
-      loggedIn: null,      // element only present when logged in
-      balance: null,       // element showing your account balance (needed for auto)
-      oddsButton: null,    // every clickable odds cell; matched by price text
-      stakeInput: null,    // stake field on the bet slip
-      slipOdds: null,      // odds shown on the slip (re-checked before placing)
-      placeButton: null,   // "Podať tiket"
-      placedConfirm: null, // element that appears after a successful bet
+      loggedIn: 'span[class*="ClientMenu-styled__AccountState-sc-"]', // header balance, only when logged in
+      balance: 'span[class*="ClientMenu-styled__AccountState-sc-"]',
+      oddsButton: '[class*="BetButton-styled__BetButton-sc-"]', // list and match pages
+      stakeInput: '[data-atid="txtAmountPaid"]',
+      slipOdds: 'span.font-12sr.text-primary',
+      placeButton: 'button[data-atid="btn-betTicket"]', // "Staviť x €"
+      placedConfirm: null, // confirmed by the balance dropping instead
     },
   },
   bet365: {
@@ -37,16 +39,76 @@ const DEFAULTS = {
 };
 // Other Slovak books: open-the-match only until calibrated.
 const EMPTY = { loggedIn: null, balance: null, oddsButton: null, stakeInput: null, slipOdds: null, placeButton: null, placedConfirm: null };
+// Tipos and Synottip run on the same platform: same slip markup, own balance markup.
+// Calibrated 2026-11-10 on logged-in accounts: filled real match slips (price, stake, slip odds)
+// without placing. Place is "PODAŤ"; the "PREPOČÍTAŤ" (recalculate) button next to it is not used.
+const TIPOS_SLIP = {
+  oddsButton: 'span.tip-rate',
+  stakeInput: '[data-test-role="summary__total-stake"]',
+  slipOdds: 'div.tip-rate',
+  placeButton: '[data-test-role="ticket-submit"]',
+  placedConfirm: null,
+};
+const TIPOS_BAL = 'span.user-information__total-balance';
+const SYNOT_BAL = 'span[data-test-role~="player-account__balance--money"]';
+const NIKE_BAL = '[data-atid="infobox-deposit-value"]';
 Object.assign(DEFAULTS, {
   fortuna: { home: 'https://www.ifortuna.sk/', domain: /ifortuna\.sk/, search: null, selectors: { ...EMPTY } },
-  nike: { home: 'https://www.nike.sk/', domain: /nike\.sk/, search: null, selectors: { ...EMPTY } },
-  doxxbet: { home: 'https://www.doxxbet.sk/sk', domain: /doxxbet\.sk/, search: null, selectors: { ...EMPTY } },
-  tipos: { home: 'https://tipkurz.etipos.sk/', domain: /etipos\.sk/, search: null, selectors: { ...EMPTY } },
-  synottip: { home: 'https://www.synottip.sk/', domain: /synottip\.sk/, search: null, selectors: { ...EMPTY } },
-  chance: { home: 'https://www.chance.sk/', domain: /chance\.sk/, search: null, selectors: { ...EMPTY } },
+  // Calibrated 2026-11-10 on a logged-in account: filled a real match slip without placing.
+  // Two stake boxes exist; te-simple-stake-input is the selection's own, the mini one follows it.
+  nike: {
+    home: 'https://www.nike.sk/', domain: /nike\.sk/, search: null,
+    selectors: {
+      ...EMPTY, balance: NIKE_BAL, loggedIn: NIKE_BAL,
+      oddsButton: 'span[data-atid="n1-bet-odd"]',
+      stakeInput: '[data-atid="te-simple-stake-input"]',
+      slipOdds: '[data-atid="te-pick-odds"]',
+      placeButton: '[data-atid="te-submit-button"]', // "Staviť x €"
+    },
+  },
+  // Calibrated 2026-11-10 on a logged-in account: filled a real slip without placing. Place is
+  // "STAVIŤ TIKET" (not "Uložiť tiket"); it may open a confirmation step, check the first real bet.
+  doxxbet: {
+    home: 'https://www.doxxbet.sk/sk', domain: /doxxbet\.sk/, search: null,
+    selectors: {
+      ...EMPTY, balance: '#client-balance', loggedIn: '#client-balance',
+      oddsButton: 'span.rate',
+      stakeInput: 'input.input--stake',
+      slipOdds: 'span.odd--ticket',
+      placeButton: 'button[ng-click="tc.preSubmitTicket()"]',
+    },
+  },
+  tipos: { home: 'https://tipkurz.etipos.sk/', domain: /etipos\.sk/, search: null, selectors: { ...TIPOS_SLIP, balance: TIPOS_BAL, loggedIn: TIPOS_BAL } },
+  synottip: { home: 'https://www.synottip.sk/', domain: /synottip\.sk/, search: null, selectors: { ...TIPOS_SLIP, balance: SYNOT_BAL, loggedIn: SYNOT_BAL } },
+  // Same platform as Tipsport, same selectors (filled a real slip 2026-11-10). Its slip has a
+  // "€ / G" switch (G = Goldeny bonus coins) that opens on G: euroToggle flips it to € first,
+  // and the bot still refuses any slip whose Place button is not in €.
+  chance: {
+    home: 'https://www.chance.sk/', domain: /chance\.sk/, search: null,
+    selectors: { ...DEFAULTS.tipsport.selectors, euroToggle: '[data-atid="ticketBuilderCurrency-EUR"]' },
+  },
   olybet: { home: 'https://www.olybet.lt/', domain: /olybet\.lt/, search: null, selectors: { ...EMPTY } },
   maxbet: { home: 'https://www.maxbet.mk/mk', domain: /maxbet\.mk/, search: null, selectors: { ...EMPTY } },
   mozzart: { home: 'https://www.mozzartbet.mk/mk', domain: /mozzartbet\.mk/, search: null, selectors: { ...EMPTY } },
+  // Megawin North Macedonia (Sportinno sportsbook), in denars. Checked 2026-11-10 on a logged-in
+  // account: filled a real slip without placing. The stake box is not an input: clicking it opens an
+  // on-screen number pad (stakeKeypad). After a pick the slip may sit collapsed at the bottom of the
+  // page (slipOpen expands it). Place is "УПЛАТИ x МКД".
+  megawin: {
+    home: 'https://megawin.mk/', domain: /megawin\.mk/, search: null, currency: 'MKD', stakeKeypad: true,
+    // The cookie notice returns on every page load and covers the slip: the bot clicks its X
+    // (closes it without accepting).
+    closePopups: ['[data-popup-id="cookie_box"] [data-element-type="UIElementPopupClose"]'],
+    selectors: {
+      ...EMPTY,
+      balance: '[data-element-id="money_amount"]', loggedIn: '[data-element-id="money_amount"]',
+      oddsButton: '[data-action="selection-select"]',
+      stakeInput: '[single-input-field-bet-amount]',
+      slipOdds: '[data-item-type="selection"] a p', // one of its lines is the price
+      slipOpen: '[minimised-section]',
+      placeButton: 'button[single-place-bet-button]',
+    },
+  },
   inbet: { home: 'https://inbet.com/sports', domain: /inbet\.com/, search: null, selectors: { ...EMPTY } },
   stake: { home: 'https://stake.com/sports/home', domain: /stake\.com/, search: null, selectors: { ...EMPTY } },
 });

@@ -6,7 +6,7 @@ const sites = require('./sites');
 const config = require('../config');
 const db = require('../db');
 const notify = require('../notify');
-const { parseMoney } = require('./parse');
+const { parseAmount } = require('./parse');
 
 const state = {}; // book -> { amount, at, error }
 const lowAlertAt = {};
@@ -25,9 +25,17 @@ async function readBook(settings, book) {
   const browser = await chrome.connect(bk.port);
   for (const p of await browser.pages()) {
     if (!site.domain.test(p.url())) continue;
-    const text = await p.$eval(sel, el => el.innerText).catch(() => null);
-    const amount = text == null ? null : parseMoney(text);
-    if (amount != null) return { amount };
+    const text = await p.$eval(sel, el => el.textContent).catch(() => null); // also when the panel is collapsed
+    const cur = site.currency || 'EUR';
+    const local = text == null ? null : parseAmount(text, cur);
+    // Kept in € (stake caps, low-balance alert, profit); books in another currency also keep their own amount.
+    if (local != null && cur === 'EUR') return { amount: local };
+    if (local != null) {
+      const rate = Number((settings.fx || {})[cur]);
+      if (!(rate > 0)) return { error: `no exchange rate for ${cur} (settings fx.${cur})` };
+      return { amount: Math.round(local / rate * 100) / 100, local, currency: cur };
+    }
+    if (text && /\d/.test(text)) return { error: `balance not in ${cur === 'EUR' ? 'euros' : cur} ("${text.trim()}"): switch the site to ${cur === 'EUR' ? '€' : cur}` };
   }
   return { error: 'balance not on page (logged out?)' };
 }
@@ -40,6 +48,7 @@ function record(settings, book, r, now = Date.now()) {
     db.addBalance(book, r.amount, now);
     state[book] = { amount: r.amount, at: now, storedAt: now };
   } else state[book] = { ...prev, at: now, error: null };
+  if (r.currency) Object.assign(state[book], { local: r.local, currency: r.currency });
   const low = Number(settings.lowBalanceAlert) || 0;
   if (low > 0 && r.amount < low) {
     if (!lowAlertAt[book] || now - lowAlertAt[book] > LOW_REPEAT_MS) {

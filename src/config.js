@@ -64,6 +64,9 @@ const DEFAULTS = {
   maxOddsDropPct: 0.0, // abort a leg if slip odds are lower than scanned odds by more than this
   balanceEverySec: 300, // read each logged-in book's balance this often (needs the balance selector)
   lowBalanceAlert: 15, // Telegram warning when a book's balance falls below this; 0 = off
+  // Euro -> other currencies, for books that are not in € (Megawin MK in denars). MKD is pegged
+  // to the euro at about 61.5; check the rate now and then.
+  fx: { MKD: 61.5 },
   bookmakers: {
     // port = its own debug Chrome. source = 'browser' (read its window) or 'api' (Odds-API.io).
     // apiName = the book's name on Odds-API.io (for source 'api' and the compare tool).
@@ -80,6 +83,7 @@ const DEFAULTS = {
     olybet: { name: 'OlyBet', port: 9310, enabled: false, source: 'browser' },
     maxbet: { name: 'Maxbet MK', port: 9330, enabled: false, source: 'browser', everySec: 60 },
     mozzart: { name: 'Mozzart MK', port: 9331, enabled: false, source: 'browser', everySec: 30 },
+    megawin: { name: 'Megawin MK', port: 9332, enabled: false, source: 'browser', everySec: 60 },
     inbet: { name: 'Inbet', port: 9320, enabled: false, source: 'browser', everySec: 60 },
     stake: { name: 'Stake', port: 9309, enabled: false, source: 'browser', everySec: 60 },
   },
