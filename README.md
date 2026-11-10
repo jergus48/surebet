@@ -80,6 +80,7 @@ Other env overrides: `ODDS_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
   | doxxbet | ~900 | `/offer/GetOfferList` | one request per sport, live |
   | tipos | ~950 | `GetWebStandardEvents` (protobuf) | 1X2 only, live |
   | synottip | ~1600 | `GetWebStandardEvents` (protobuf) | 1X2 + DC + totals, prematch |
+  | megawin | ~10 (+ tennis, basketball) | Sportinno `widgets/derby-events` | homepage featured matches only (the full offer needs the widget's login token); 1X2/winner + goal totals, prematch; every 60 s |
   | bet365 | few | page reading | Bet365 serves empty pages after automated reloads: use `source: "api"` |
 
   Wrong pairings: add `data/aliases.json` `{ "name at one book": "name at another" }`.
@@ -136,8 +137,8 @@ planned in € and converted with `fx.MKD` (61.5, the peg) to whole denars, the 
 in € (the dashboard also shows the МКД amount), and the Place button must read МКД. Its stake box
 is an on-screen number pad, its slip collapses to a bar the bot expands, and it closes the cookie
 notice with its X (never accepts) on every page. megawin.mk/sport redirects to the homepage from
-outside North Macedonia, so only the homepage's featured matches can be bet from there. Megawin
-has no odds reader yet, so it is not in surebets.
+outside North Macedonia, so only the homepage's featured matches can be bet from there, and those
+(~30, read from Sportinno's public featured feed) are the matches its odds reader scans.
 
 ### Balances, bet confirmation and money
 
