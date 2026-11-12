@@ -151,7 +151,8 @@ async function collect(settings, sportKeys) {
         const pageLink = ORIGIN + route;
         events.push({
           book: 'bet365', sport: key, league: null, home: r.home, away: r.away, start, live: false, link: pageLink,
-          odds: r.odds.map((price, i) => ({ book: 'bet365', market: 'h2h', point: null, sel: sels[i], price, link: pageLink, updated: Date.now() })),
+          // home/away in bet365's own spelling (German): the bettor checks its slip against these.
+          odds: r.odds.map((price, i) => ({ book: 'bet365', market: 'h2h', point: null, sel: sels[i], price, link: pageLink, updated: Date.now(), home: r.home, away: r.away })),
         });
       }
     }

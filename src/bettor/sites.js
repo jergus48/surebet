@@ -28,12 +28,27 @@ const DEFAULTS = {
       placedConfirm: null, // confirmed by the balance dropping instead
     },
   },
+  // Calibrated 2026-11-12 on a logged-in bet365.com account (German site, €): filled a real slip
+  // without placing. Page classes are scrambled per deploy, so only the readable bet-slip classes
+  // (bss-/bsf-/bs-) and the price attribute data-content are used. A pick is sometimes answered with
+  // "Entschuldigung, es ist ein Fehler aufgetreten" and an empty slip: the bot hard-refreshes and
+  // clicks once more (slipError). The balance box sits in the slip and is there logged out too:
+  // balanceRequired stops a leg that shows no amount. Place is "Wette platzieren"; bet365 may ask
+  // to accept changed odds (bsf-AcceptButton), which the bot never clicks.
   bet365: {
     home: 'https://www.bet365.com/',
     domain: /bet365\./,
     search: null,
+    slipError: '.bs-GeneralErrorMessage_Contents',
+    balanceRequired: true,
     selectors: {
-      loggedIn: null, balance: null, oddsButton: null, stakeInput: null, slipOdds: null, placeButton: null, placedConfirm: null,
+      loggedIn: '.bs-Balance_Value',
+      balance: '.bs-Balance_Value',
+      oddsButton: 'span[data-content]',
+      stakeInput: '.bsf-StakeBox_StakeValue-input',
+      slipOdds: '.bss-NormalBetItem_OddsContainer .bs-OddsLabel',
+      placeButton: '.bsf-PlaceBetButton',
+      placedConfirm: null,
     },
   },
 };

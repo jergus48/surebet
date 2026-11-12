@@ -78,7 +78,10 @@ function findSurebets(events, opts = {}) {
           const others = list.filter(o => o.sel === l.sel && o.book !== l.book).map(o => o.price).sort((a, b) => a - b);
           const ref = others.length ? others[Math.floor(others.length / 2)] : null;
           const outlier = ref != null && l.price >= ref * 1.2;
-          return { book: l.book, sel: l.sel, price: l.price, link: l.link || null, linkGeneric: !!l.linkGeneric, updated: l.updated || null, stake: st.stakes[i], ref, outlier };
+          const leg = { book: l.book, sel: l.sel, price: l.price, link: l.link || null, linkGeneric: !!l.linkGeneric, updated: l.updated || null, stake: st.stakes[i], ref, outlier };
+          // The book's own spelling of the teams, when its reader gives one (bet365 is in German).
+          if (l.home && l.away) Object.assign(leg, { home: l.home, away: l.away });
+          return leg;
         });
         out.push({
           key: [ev.id, market, point ?? '', ...legs.map(l => `${l.book}:${l.sel}`)].join('|'),

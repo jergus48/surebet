@@ -202,6 +202,55 @@ function checkSlip(prices, price, maxDropPct = 0) {
   return null;
 }
 
+// Finds and clicks the odds button showing leg.price. When the same price sits on several
+// matches (bet365 coupon pages), the button inside the fixture naming this match wins.
+async function clickOdds(page, site, leg, names) {
+  const S = site.selectors;
+  await page.waitForSelector(S.oddsButton, { timeout: 15000 });
+  const texts = priceTexts(leg.price);
+  const found = [];
+  for (const h of await page.$$(S.oddsButton)) {
+    const t = (await h.evaluate(el => el.innerText || '')).trim();
+    // Carousels keep clones far left/right of the page (Megawin's featured matches): skip those.
+    if (!(await h.evaluate(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }))) continue;
+    // Sites keep hidden copies of markets: only a button with a box on screen can be clicked.
+    // The price ends the button's text ("1\n1.59"), not just its digits: "2\n11.59" is not 1.59.
+    if (texts.some(x => t === x || (t.endsWith(x) && !/[\d.,]/.test(t[t.length - x.length - 1]))) && (await h.boundingBox())) found.push(h);
+  }
+  if (!found.length) throw new Error(`${leg.book}: odds ${leg.price} not found on page (moved or wrong event)`);
+  let target = found[0];
+  if (found.length > 1) {
+    for (const h of found) {
+      // Blocks around the button up to about one fixture row: does one of them name this match?
+      const around = await h.evaluate(el => {
+        const out = [];
+        for (let n = el.parentElement, i = 0; n && i < 8; n = n.parentElement, i++) {
+          const t = n.innerText || '';
+          if (t.length > 400) break;
+          out.push(t);
+        }
+        return out;
+      });
+      if (around.some(t => names.some(([hm, aw]) => sameMatch(t, hm, aw)))) { target = h; break; }
+    }
+  }
+  // A banner or popup over the button (Megawin's cookie notice) takes the click instead.
+  await closePopups(page, site);
+  await target.evaluate(el => el.scrollIntoView({ block: 'center' }));
+  await sleep(300);
+  const cover = await target.evaluate(el => {
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !top || el.contains(top) || top.contains(el) ? null : (top.innerText || top.tagName).replace(/\s+/g, ' ').slice(0, 60);
+  });
+  if (cover) throw new Error(`${leg.book}: something covers the odds button ("${cover}"): close that banner or popup in its window`);
+  await target.click();
+  await sleep(site.slipError ? 2000 : 500);
+  await closePopups(page, site);
+  await openSlip(page, S);
+  return target;
+}
+
 // Prepare one leg up to (not including) the Place click.
 async function prepareLeg(settings, sb, leg) {
   const bk = settings.bookmakers[leg.book];
@@ -232,6 +281,8 @@ async function prepareLeg(settings, sb, leg) {
   leg.balance = null;
   if (S.balance) {
     leg.balance = await readBalance(page, S.balance, 10000, leg.currency);
+    // Bet365 keeps its balance box in the slip even when logged out: no amount means no session.
+    if (leg.balance == null && site.balanceRequired) throw new Error(`${leg.book}: no balance shown, log in in its Chrome window`);
     if (leg.balance != null && leg.balance < leg.local) {
       throw new Error(`${leg.book}: balance ${leg.balance} ${unitOf(leg)} is below the stake ${leg.local} ${unitOf(leg)}, top it up`);
     }
@@ -243,33 +294,20 @@ async function prepareLeg(settings, sb, leg) {
   }
 
   // Click the odds cell whose text is the scanned price.
-  await page.waitForSelector(S.oddsButton, { timeout: 15000 });
-  const texts = priceTexts(leg.price);
-  const handles = await page.$$(S.oddsButton);
-  let target = null;
-  for (const h of handles) {
-    const t = (await h.evaluate(el => el.innerText || '')).trim();
-    // Carousels keep clones far left/right of the page (Megawin's featured matches): skip those.
-    if (!(await h.evaluate(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }))) continue;
-    // Sites keep hidden copies of markets: only a button with a box on screen can be clicked.
-    // The price ends the button's text ("1\n1.59"), not just its digits: "2\n11.59" is not 1.59.
-    if (texts.some(x => t === x || (t.endsWith(x) && !/[\d.,]/.test(t[t.length - x.length - 1]))) && (await h.boundingBox())) { target = h; break; }
+  const names = [[sb.home, sb.away], [leg.home, leg.away]].filter(([h, a]) => h && a);
+  let target = await clickOdds(page, site, leg, names);
+  // Bet365 sometimes answers a pick with "Entschuldigung, es ist ein Fehler aufgetreten" and keeps
+  // the slip empty; a hard refresh (cache bypassed) fixes it. One refresh and one more click.
+  if (site.slipError && (await visible(page, site.slipError))) {
+    if (S.slipOdds && (await slipPrices(page, S.slipOdds)).length) throw new Error(`${leg.book}: the site showed an error after the pick, check the slip in that window`);
+    const cdp = await page.target().createCDPSession();
+    await cdp.send('Page.reload', { ignoreCache: true });
+    await cdp.detach().catch(() => { });
+    await sleep(8000);
+    await closePopups(page, site);
+    target = await clickOdds(page, site, leg, names);
+    if (await visible(page, site.slipError)) throw new Error(`${leg.book}: the site rejected the pick twice ("${(await (await visible(page, site.slipError)).evaluate(el => el.innerText)).trim().slice(0, 60)}")`);
   }
-  if (!target) throw new Error(`${leg.book}: odds ${leg.price} not found on page (moved or wrong event)`);
-  // A banner or popup over the button (Megawin's cookie notice) takes the click instead.
-  await closePopups(page, site);
-  await target.evaluate(el => el.scrollIntoView({ block: 'center' }));
-  await sleep(300);
-  const cover = await target.evaluate(el => {
-    const r = el.getBoundingClientRect();
-    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return !top || el.contains(top) || top.contains(el) ? null : (top.innerText || top.tagName).replace(/\s+/g, ' ').slice(0, 60);
-  });
-  if (cover) throw new Error(`${leg.book}: something covers the odds button ("${cover}"): close that banner or popup in its window`);
-  await target.click();
-  await sleep(500);
-  await closePopups(page, site);
-  await openSlip(page, S);
 
   // Hidden copies of the stake box exist before the slip opens: wait for a visible one.
   // Some sites ignore a click made before their slip has loaded (Megawin right after opening):
@@ -304,7 +342,7 @@ async function prepareLeg(settings, sb, leg) {
       for (let i = 0; i < 6 && n.parentElement && (n.innerText || '').length < 40; i++) n = n.parentElement;
       return n.innerText || '';
     });
-    if (!sameMatch(slipText, sb.home, sb.away)) throw new Error(`${leg.book}: the slip shows "${slipText.replace(/\s+/g, ' ').slice(0, 60)}", not ${sb.home} - ${sb.away}`);
+    if (!names.some(([h, a]) => sameMatch(slipText, h, a))) throw new Error(`${leg.book}: the slip shows "${slipText.replace(/\s+/g, ' ').slice(0, 60)}", not ${sb.home} - ${sb.away}`);
   }
   // Slips can re-render after typing (Chance's € switch reset 1 to its 10 € default): settle, re-check.
   await sleep(1500);

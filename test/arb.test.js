@@ -10,6 +10,14 @@ assert.strictEqual(r.length, 1);
 assert.strictEqual(r[0].profitPct, 5);
 assert.deepStrictEqual(r[0].legs.map(l => l.book), ['tipsport', 'bet365']);
 
+// A book's own team spelling (bet365 is German) rides along on its leg for the slip check.
+{
+  const named = { ...o('bet365', '2', 2.1), home: 'Slowakei', away: 'Färöer' };
+  const s = findSurebets([ev([o('tipsport', '1', 2.1), named])])[0];
+  assert.deepStrictEqual([s.legs[1].home, s.legs[1].away], ['Slowakei', 'Färöer']);
+  assert.strictEqual(s.legs[0].home, undefined);
+}
+
 // No arb when margins overlap
 r = findSurebets([ev([o('tipsport', '1', 1.9), o('tipsport', '2', 1.9), o('bet365', '1', 1.85), o('bet365', '2', 1.95)])]);
 assert.strictEqual(r.length, 0);

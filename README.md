@@ -45,8 +45,8 @@ Every leg in the dashboard and in Telegram links to that match on that bookmaker
 
 ### Start betting on the Mac (after `bash scripts/mac/update.sh`)
 
-All seven betting books ship calibrated (Tipsport, Chance, Niké, DOXXbet, Tipos, Synottip,
-Megawin MK), so there is no calibrating to do. Once:
+All eight betting books ship calibrated (Tipsport, Chance, Niké, DOXXbet, Tipos, Synottip,
+Megawin MK, Bet365), so there is no calibrating to do. Once:
 
 1. Nastavenia > Bookmakers: tick the books you have accounts at, Save. Provider: `browser`.
 2. Overview > **Open window (log in)** next to each book, log in by hand in that window, leave it
@@ -139,6 +139,16 @@ is an on-screen number pad, its slip collapses to a bar the bot expands, and it 
 notice with its X (never accepts) on every page. megawin.mk/sport redirects to the homepage from
 outside North Macedonia, so only the homepage's featured matches can be bet from there, and those
 (~30, read from Sportinno's public featured feed) are the matches its odds reader scans.
+
+**Bet365** (port 9302, filled a real slip 2026-11-12 on a logged-in bet365.com account without
+placing) uses only its readable bet-slip classes and the price attribute `data-content`; the rest
+of its markup is scrambled per deploy. Sometimes a pick is answered with "Entschuldigung, es ist
+ein Fehler aufgetreten" and an empty slip: the bot then hard-refreshes the page and clicks once
+more, and stops the leg if it happens again. The slip check also accepts bet365's German team
+names ("Slowakei v Färöer"), and when a price repeats on the page it clicks the one in the right
+match. Its balance box is part of the slip, so a leg without a balance shown is stopped as logged
+out. The account must be used from its own country (an Austrian account from Austria): from
+elsewhere bet365 refuses picks with that same error. Leave the Jackpot 365 switch on the slip off.
 
 ### Balances, bet confirmation and money
 
