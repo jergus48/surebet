@@ -77,7 +77,7 @@ const TIPOS_MARKETS = {
   marketUI: { tabs: '[data-test-role="game-group-tabs__item"]', game: '[data-test-role="event-game"]', button: '[data-test-role="rate"]' },
   // Tested 2026-11-13 on both sites (filled, never placed): totals, handicap, BTTS, draw no bet; 1st-half
   // totals use the same block layout and labels.
-  betMarkets: ['totals', 'spreads', 'btts', 'dnb', '1h_totals'],
+  betMarkets: ['totals', 'spreads', 'btts', 'dnb', '1h_totals', 'home_totals', 'away_totals'], // team goals tested 2026-11-13 too
 };
 const TIPOS_BAL = 'span.user-information__total-balance';
 const SYNOT_BAL = 'span[data-test-role~="player-account__balance--money"]';

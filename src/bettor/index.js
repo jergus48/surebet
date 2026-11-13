@@ -295,6 +295,9 @@ const MARKET_UI = {
   '1h_totals': (sb, l) => ({ game: ['1. polčas - Počet gólov'], label: `${l.sel === 'O' ? 'Nad' : 'Pod'} (${sb.point})` }),
   ot_totals: (sb, l) => ({ game: ['Počet gólov (vrátane predĺženia a nájazdov)'], label: `${l.sel === 'O' ? 'Nad' : 'Pod'} (${sb.point})` }),
   btts: (sb, l) => ({ game: ['Obaja dajú gól'], label: l.sel === 'Y' ? 'Áno' : 'Nie' }),
+  // team goals: Tipos names the block after the team ("Moldavsko celkový počet gólov"), Synottip "Tím1 ..."
+  home_totals: (sb, l) => ({ game: [`${l.home} celkový počet gólov`, 'Tím1 celkový počet gólov'], label: `${l.sel === 'O' ? 'Nad' : 'Pod'} (${sb.point})` }),
+  away_totals: (sb, l) => ({ game: [`${l.away} celkový počet gólov`, 'Tím2 celkový počet gólov'], label: `${l.sel === 'O' ? 'Nad' : 'Pod'} (${sb.point})` }),
   spreads: (sb, l) => ({ game: ['Handicap'], label: l.sel === 'H' ? `Tím 1 (${sgn(sb.point)})` : `Tím 2 (${sgn(-sb.point)})` }),
   ot_spreads: (sb, l) => ({ game: ['Handicap (vrátane predĺženia a nájazdov)'], label: l.sel === 'H' ? `Tím 1 (${sgn(sb.point)})` : `Tím 2 (${sgn(-sb.point)})` }),
 };
@@ -415,6 +418,8 @@ async function unpick(page, S, target, book) {
 
 // Prepare one leg up to (not including) the Place click.
 async function prepareLeg(settings, sb, leg) {
+  // Cross-market surebet: each leg has its own market (DNB, double chance, OT winner).
+  if (leg.market) sb = { ...sb, market: leg.market, point: leg.point ?? null };
   const bk = settings.bookmakers[leg.book];
   if (!bk || !bk.enabled) throw new Error(`${leg.book}: not enabled in Settings`);
   const site = sites.load()[leg.book];
@@ -577,10 +582,11 @@ function betAllowed(settings, sb) {
   const min = minPct(settings, sb.live);
   if (sb.profitPct < min) return `profit ${sb.profitPct}% < ${min}%${sb.live ? ' (live)' : ''}`;
   // Markets other than 1X2 / double chance: only where clicking that market is set up and tested.
-  if (sb.market && sb.market !== 'h2h') {
+  {
     const all = sites.load();
-    const no = [...new Set(sb.legs.filter(l => !l.pick).map(l => l.book))].filter(b => !((all[b] && all[b].betMarkets) || []).includes(sb.market));
-    if (no.length) return `${sb.market} betting not set up at ${no.join(', ')}`;
+    const mk = l => l.market || sb.market;
+    const no = (sb.legs || []).filter(l => mk(l) && mk(l) !== 'h2h' && !l.pick && !((all[l.book] && all[l.book].betMarkets) || []).includes(mk(l))).map(l => `${mk(l)} at ${l.book}`);
+    if (no.length) return `betting not set up: ${[...new Set(no)].join(', ')}`;
   }
   // Suspect = one price far above the other books. With autoBetSuspect it is still bet: the price
   // actually shown on every slip is re-checked against the minimum before Place.

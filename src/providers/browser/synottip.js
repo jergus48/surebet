@@ -197,7 +197,7 @@ function parse(json, sportKey) {
       }
       games.push({ name: g.Name, rows });
     }
-    let odds = marketsOf(sportKey, t[0].trim(), t[1].trim(), games).map(o => ({ book: 'synottip', ...o, link, updated: now }));
+    let odds = marketsOf(sportKey, t[0].trim(), t[1].trim(), games).map(o => ({ book: 'synottip', ...o, link, updated: now, ...(/^(home|away)_totals$/.test(o.market) ? { home: t[0].trim(), away: t[1].trim() } : {}) }));
     if (!odds.some(o => o.market === 'h2h')) {
       odds = [];
       for (const gg of ev.GameGroups || []) for (const g of gg.Games || []) odds.push(...oddsOf(g, link, now));

@@ -24,6 +24,8 @@ function outcomeSets(market, sels, drawPossible) {
   // Two-way winners: draw no bet (stake back on a draw at every book), hockey incl. overtime, 1st set.
   if (market === 'dnb' || market === 'ot_h2h' || market === 'set1_h2h') return [['1', '2']];
   if (market === 'btts') return [['Y', 'N']];
+  // Cross-market pairs (CROSS below): leg A from one market, leg B from another.
+  if (market.startsWith('x_')) return [['A', 'B']];
   // Over / under and handicaps, also for the 1st half, one team, overtime-inclusive and sets.
   if (/^(?:(?:1h|home|away|ot)_)?totals$/.test(market)) return [['O', 'U']];
   if (/^(?:(?:ot|sets)_)?spreads$/.test(market)) return [['H', 'A']];
@@ -127,6 +129,27 @@ function flippedFavourite(odds, books) {
   return fav.includes('1') && fav.includes('2');
 }
 
+// Cross-market surebets (ported from the Python scanner): two legs from different markets that still
+// cover every result with one winner each, so the 2-way formula holds:
+//   draw no bet 1 + double chance X2: home wins -> DNB pays; draw -> X2 pays and DNB is refunded
+//   (a bonus on top); away wins -> X2 pays. Same the other way round (DNB 2 + 1X).
+//   hockey: winner incl. overtime 1 + regular-time X2: home wins in regular time -> OT winner pays;
+//   draw after 60 min -> X2 pays (and the OT winner may pay too); away wins -> X2 pays.
+const CROSS = [
+  ['x_dnb1_X2', ['dnb', '1'], ['h2h', 'X2']],
+  ['x_dnb2_1X', ['dnb', '2'], ['h2h', '1X']],
+  ['x_ot1_X2', ['ot_h2h', '1'], ['h2h', 'X2']],
+  ['x_ot2_1X', ['ot_h2h', '2'], ['h2h', '1X']],
+];
+function addCross(groups) {
+  for (const [key, [ma, sa], [mb, sb]] of CROSS) {
+    const a = (groups.get(`${ma}|`) || []).filter(o => o.sel === sa);
+    const b = (groups.get(`${mb}|`) || []).filter(o => o.sel === sb);
+    if (!a.length || !b.length) continue;
+    groups.set(`${key}|`, [...a.map(o => ({ ...o, market: key, sel: 'A', realMarket: ma, realSel: sa })), ...b.map(o => ({ ...o, market: key, sel: 'B', realMarket: mb, realSel: sb }))]);
+  }
+}
+
 function findSurebets(events, opts = {}) {
   const { minProfitPct = 0, maxProfitPct = 100, books = null, bankroll = 100, step = 1, includeLive = true, maxAgeMs = 0, now = Date.now(), stakeTiers = null } = opts;
   const out = [];
@@ -141,6 +164,7 @@ function findSurebets(events, opts = {}) {
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(o);
     }
+    addCross(groups);
     for (const [, list] of groups) {
       const { market, point } = list[0];
       const sels = new Set(list.map(o => o.sel));
@@ -173,6 +197,8 @@ function findSurebets(events, opts = {}) {
           const leg = { book: l.book, sel: l.sel, price: l.price, link: l.link || null, linkGeneric: !!l.linkGeneric, updated: l.updated || null, stake: st.stakes[i], ref, outlier };
           // pick: the exact button of this price on the book's match page (extra markets from match details)
           if (l.pick) leg.pick = l.pick;
+          // cross-market surebet: this leg's own market and pick (the bettor clicks that)
+          if (l.realMarket) Object.assign(leg, { market: l.realMarket, sel: l.realSel, point: null });
           // listed the other way round at this book: its own name for the pick (bettor clicks that)
           if (l.swapped) Object.assign(leg, { bookSel: l.bookSel, bookPoint: l.bookPoint, swapped: true });
           // The book's own spelling of the teams, when its reader gives one (bet365 is in German).
@@ -180,7 +206,7 @@ function findSurebets(events, opts = {}) {
           return leg;
         });
         out.push({
-          key: [ev.id, market, point ?? '', ...legs.map(l => `${l.book}:${l.sel}`)].join('|'),
+          key: [ev.id, market, point ?? '', ...legs.map(l => `${l.book}:${l.realSel || l.sel}`)].join('|'),
           eventId: ev.id,
           sport: ev.sport,
           sportTitle: ev.sportTitle,
@@ -222,6 +248,10 @@ function marketLabel(sb) {
   if (m[2] === 'totals') return `${pre}Over ${sb.point} vs Under ${sb.point}`;
   if (m[2] === 'spreads') return `${pre}AH ${sign(sb.point)} vs ${sign(-sb.point)}`;
   if (m[2] === 'dnb') return 'Draw no bet 1 vs 2';
+  if (sb.market === 'x_dnb1_X2') return 'Draw no bet 1 vs X2';
+  if (sb.market === 'x_dnb2_1X') return 'Draw no bet 2 vs 1X';
+  if (sb.market === 'x_ot1_X2') return 'Winner incl. OT 1 vs X2 (60 min)';
+  if (sb.market === 'x_ot2_1X') return 'Winner incl. OT 2 vs 1X (60 min)';
   if (m[2] === 'btts') return 'Both teams score: yes vs no';
   return sb.market;
 }

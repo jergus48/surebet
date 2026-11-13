@@ -133,7 +133,8 @@ function parse(json, sportKey) {
               // All markets the list carries (GameIds), mapped like Synottip; the old main-market pick
               // stays as the fallback for sports the mapper does not know.
               const now = Date.now();
-              let odds = marketsOf(sportKey, teams.home, teams.away, games).map(o => ({ book: 'tipos', ...o, link, updated: now }));
+              // team goals carry Tipos' own team names: its page names those blocks after the team
+              let odds = marketsOf(sportKey, teams.home, teams.away, games).map(o => ({ book: 'tipos', ...o, link, updated: now, ...(/^(home|away)_totals$/.test(o.market) ? { home: teams.home, away: teams.away } : {}) }));
               if (!odds.some(o => o.market === 'h2h')) odds = [...mainOdds(games, sportKey, link), ...odds];
               if (!odds.length) continue;
               out.push({ book: 'tipos', sport: sportKey, league, home: teams.home, away: teams.away, start, live: false, link, odds, tiposId: id });

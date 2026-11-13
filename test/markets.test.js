@@ -54,7 +54,7 @@ assert.ok(!sbs.some(x => x.market === 'totals' && x.point === 3.5)); // no under
 // auto bets: a new market only where clicking it is set up (sites.betMarkets)
 const s = { autoMinProfitPct: 3, autoPrematchOnly: false, autoBetSuspect: true }; // test prices make it look suspect
 assert.strictEqual(betAllowed(s, { ...totals, profitPct: 5 }), null); // tipos + synottip: set up
-assert.ok(/not set up at nike/.test(betAllowed(s, { ...totals, profitPct: 5, legs: [totals.legs[0], { ...totals.legs[1], book: 'nike' }] })));
+assert.ok(/not set up: totals at nike/.test(betAllowed(s, { ...totals, profitPct: 5, legs: [totals.legs[0], { ...totals.legs[1], book: 'nike' }] })));
 assert.ok(/not set up/.test(betAllowed(s, { ...totals, market: 'ot_totals', profitPct: 5 })));
 console.log('market tests passed');
 
@@ -141,7 +141,7 @@ console.log('market tests passed');
     { book: 'nike', sel: 'O', price: 2.2, pick: { css: '[title^="Číslo zápasu: 1 |"] a', label: 'viac ako 2.5' } },
     { book: 'doxxbet', sel: 'U', price: 1.95, pick: { css: '.Odd_1' } }] };
   assert.strictEqual(betAllowed(s, sb), null);
-  assert.ok(/not set up at doxxbet/.test(betAllowed(s, { ...sb, legs: [sb.legs[0], { ...sb.legs[1], pick: undefined }] })));
+  assert.ok(/not set up: totals at doxxbet/.test(betAllowed(s, { ...sb, legs: [sb.legs[0], { ...sb.legs[1], pick: undefined }] })));
   console.log('pick gate tests passed');
 }
 
@@ -159,4 +159,18 @@ console.log('market tests passed');
   const ev = { id: 'bj', sport: 'football', home: 'Brazília', away: 'Japonsko', drawPossible: true, start: 1, odds };
   assert.ok(!findSurebets([ev], { minProfitPct: 1, bankroll: 30, step: 1 }).some(sb => sb.market === 'spreads' || sb.market === 'dnb'));
   console.log('side check tests passed');
+}
+
+// cross-market surebets: DNB 1 + X2, hockey OT winner 1 + regular-time X2
+{
+  const { findSurebets, marketLabel } = require('../src/arb');
+  const q = (book, market, sel, price) => ({ book, market, point: null, sel, price });
+  const ev = { id: 'cx', sport: 'football', home: 'A', away: 'B', drawPossible: true, start: 1, odds: [
+    q('nike', 'h2h', '1', 2.2), q('nike', 'h2h', 'X', 4.0), q('nike', 'h2h', '2', 4.0), q('nike', 'h2h', 'X2', 1.9),
+    q('tipos', 'dnb', '1', 2.3), q('tipos', 'dnb', '2', 2.6), q('tipos', 'h2h', '1', 2.15), q('tipos', 'h2h', 'X', 3.2), q('tipos', 'h2h', '2', 3.4)] };
+  const sb = findSurebets([ev], { minProfitPct: 0, bankroll: 30 }).find(x => x.market === 'x_dnb1_X2');
+  assert.ok(sb, 'DNB 1 (2.30) vs X2 (1.90): 1/2.3 + 1/1.9 = 0.96 < 1');
+  assert.deepStrictEqual(sb.legs.map(l => `${l.book} ${l.market} ${l.sel}`).sort(), ['nike h2h X2', 'tipos dnb 1']);
+  assert.strictEqual(marketLabel(sb), 'Draw no bet 1 vs X2');
+  console.log('cross-market tests passed');
 }

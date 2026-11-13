@@ -188,6 +188,9 @@ function parseDetail(json, link, now = Date.now()) {
       case 'uf:11': { const p = two(0, 0, '1', '2'); if (p) put('dnb', null, p); break; }
       case 'uf:29': { const p = two(0, 0, 'Y', 'N'); if (p) put('btts', null, p); break; }
       case 'uf:60': if (t['1'] && t.X && t['2']) put('1h_h2h', null, { '1': t['1'], X: t.X, '2': t['2'], ...(t['1X'] && t.X2 && t['12'] ? { '1X': t['1X'], X2: t.X2, '12': t['12'] } : {}) }); break;
+      // tennis / volleyball 1st set winner, volleyball total points (ids from the Python scanner)
+      case 'uf:202': { const p = two(0, 0, '1', '2'); if (p) put('set1_h2h', null, p); break; }
+      case 'uf:238': { const l = lastNum(e.ChanceTypeName); const p = two(0, 0, 'O', 'U'); if (p && half(l) && l > 60) put('totals', l, p); break; }
       case 'uf:16': { const l = firstHcp(e.ChanceTypeName); const p = two(0, 0, 'H', 'A'); if (p && half(l)) put('spreads', l, p); break; }
       case 'uf:18': case 'uf:68': case 'uf:19': case 'uf:20': {
         const l = lastNum(e.ChanceTypeName);
