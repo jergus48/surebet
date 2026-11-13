@@ -556,9 +556,9 @@ async function waitForDrop(read, before, stake, { timeoutMs = 20000, everyMs = 1
 }
 
 // Returns 'confirmed' or 'unconfirmed' (clicked, but no proof the site took the bet).
-async function placeLeg(p) {
+async function placeLeg(p, { verified = false } = {}) {
   const S = p.site.selectors;
-  await verifySlip(p.page, S, p.leg); // last look: stake and currency label unchanged since filling
+  if (!verified) await verifySlip(p.page, S, p.leg); // last look: stake and currency label unchanged since filling
   const btn = await visible(p.page, S.placeButton);
   if (!btn) throw new Error(`${p.leg.book}: no visible Place button`);
   await btn.click();
@@ -784,7 +784,26 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
     // still loses at most COMPLETE_MAX_LOSS_PCT (completing beats holding an open position).
     const order = [...ok].sort((a, b) => provenCount(a.leg.book) - provenCount(b.leg.book));
     const legResult = new Map(); // p -> 'confirmed' | 'unconfirmed' | Error | 'skipped'
-    for (const p of order) {
+    // LIVE: odds move in seconds, so one leg after another leaves half bets. Every slip is read again
+    // at the same moment and checked in the same moment (stake, currency, no "accept changes"); only
+    // if the surebet still makes the live minimum on those slip prices are ALL Place buttons clicked
+    // together. Otherwise nothing is placed and every pick comes off.
+    if (sb.live) {
+      await readSlips(ok);
+      const last = stillProfitable(settings, ok.map(p => p.leg), true);
+      const checks = await Promise.allSettled(ok.map(p => verifySlip(p.page, p.site.selectors, p.leg)));
+      const bad = checks.map((r, i) => (r.status === 'rejected' ? `${ok[i].leg.book}: ${r.reason.message}` : null)).filter(Boolean);
+      if (!last.ok || bad.length) {
+        const detail = `live, last joint check failed (${!last.ok ? `profit on the slips ${last.pct}% < ${minPct(settings, true)}%` : bad.join(' | ')}): nothing placed. ${ok.map(legLine).join(' | ')}`;
+        db.setBet(betId, 'failed', detail);
+        db.log('warn', `[auto] ${title}: ${detail}`);
+        await clearAll();
+        return { status: 'failed', detail };
+      }
+      const clicks = await Promise.allSettled(ok.map(p => placeLeg(p, { verified: true })));
+      ok.forEach((p, i) => legResult.set(p, clicks[i].status === 'fulfilled' ? clicks[i].value : clicks[i].reason));
+    }
+    for (const p of sb.live ? [] : order) {
       const done = order.filter(q => legResult.get(q) === 'confirmed');
       if (done.length) {
         await readSlips([p]);
