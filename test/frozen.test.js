@@ -22,3 +22,17 @@ srv.listen(0, '127.0.0.1', async () => {
     console.log('frozen tab tests passed');
   } catch (e) { console.error(e); process.exitCode = 1; } finally { srv.close(); }
 });
+
+// per-book proxy: only that window, only scheme://host:port
+{
+  const assert2 = require('assert');
+  const config = require('../src/config');
+  const orig = config.load;
+  config.load = () => ({ bookmakers: { megawin: { proxy: 'socks5://mk.example.net:1080' }, tipos: {}, bad: { proxy: 'http://user:pw@x:1' } } });
+  const c = require('../src/bettor/chrome');
+  assert2.ok(c.launchArgs(9332, 'megawin').includes('--proxy-server=socks5://mk.example.net:1080'));
+  assert2.ok(!c.launchArgs(9306, 'tipos').some(a => a.startsWith('--proxy-server')));
+  assert2.throws(() => c.launchArgs(1, 'bad'), /not scheme:\/\/host:port/);
+  config.load = orig;
+  console.log('proxy args tests passed');
+}

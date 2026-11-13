@@ -26,8 +26,22 @@ function findChromeExe() {
   return cands.find(p => p && fs.existsSync(p)) || null;
 }
 
+// Optional proxy for ONE bookmaker's window (settings.bookmakers.<book>.proxy, e.g. a North Macedonia
+// exit for Megawin): "http://host:port", "https://host:port" or "socks5://host:port". No password in
+// the address: if the proxy asks for one, Chrome shows its own sign-in box and you type it there.
+// Every other window keeps the normal connection. WebRTC is kept from bypassing the proxy.
+const PROXY_RE = /^(https?|socks5):\/\/[a-z0-9.-]+:\d{2,5}$/i;
+function proxyArgs(bookKey) {
+  let proxy;
+  try { proxy = require('../config').load().bookmakers[bookKey]?.proxy; } catch { return []; }
+  if (!proxy) return [];
+  if (!PROXY_RE.test(proxy)) throw new Error(`${bookKey}: proxy "${proxy}" is not scheme://host:port (http, https or socks5, no password in it)`);
+  return [`--proxy-server=${proxy}`, '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'];
+}
+
 function launchArgs(port, bookKey) {
   return [
+    ...proxyArgs(bookKey),
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profileDir(bookKey)}`,
     '--disable-background-timer-throttling',
@@ -125,4 +139,4 @@ async function betPage(port) {
 
 const isBetPage = page => [...betTabs.values()].includes(page);
 
-module.exports = { findChromeExe, launch, launchCommand, isUp, connect, bookPage, betPage, isBetPage, profileDir, replaceFrozenTab, isTimeout };
+module.exports = { findChromeExe, launch, launchCommand, launchArgs, isUp, connect, bookPage, betPage, isBetPage, profileDir, replaceFrozenTab, isTimeout };
