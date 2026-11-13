@@ -620,7 +620,11 @@ function capOf(settings, book) {
   // The live balance (read from the logged-in window) replaces the typed-in bankroll.
   const bankroll = balances.fresh(book) ?? Number(bk.bankroll);
   const pct = bankroll > 0 && Number(bk.stakePercent) > 0 ? bankroll * Number(bk.stakePercent) / 100 : 0;
-  return pct || Number(bk.maxStakePerBet);
+  const cap = pct || Number(bk.maxStakePerBet);
+  // Never more than the book holds right now (live balance): the surebet is re-split smaller instead
+  // of one leg stopping with "balance below the stake" (DOXXbet 18.90 EUR vs a 20 EUR leg, 2026-11-13).
+  const live = balances.fresh(book);
+  return live != null && live > 0 && cap > 0 ? Math.min(cap, Math.floor(live * 10) / 10) : cap;
 }
 
 function applyStakeCaps(settings, sb) {
@@ -789,6 +793,9 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
     const anyClicked = res.some(r => r === 'confirmed' || r === 'unconfirmed');
     const status = anyClicked ? placedStatus(res.map(r => (r === 'confirmed' || r === 'unconfirmed' ? r : 'failed'))) : 'failed';
     if (anyClicked) betEvents.add(ev); // Place was clicked on this match: no second bet on it
+    // What was bet, for the overview (open bets, their payout and locked profit).
+    if (anyClicked) db.setBetLegs(betId, { home: sb.home, away: sb.away, start: sb.start, market: sb.market, point: sb.point ?? null, live: !!sb.live,
+      legs: ok.map((p, i) => ({ book: p.leg.book, sel: p.leg.sel, price: p.leg.slipPrice || p.leg.price, stake: p.leg.stake, placed: res[i] === 'confirmed' })) });
     const detail = ok.map((p, i) => `${p.leg.book}: ${res[i] === 'confirmed' ? 'PLACED' : res[i] === 'unconfirmed' ? 'CLICKED, NOT CONFIRMED' : res[i] === 'skipped' ? 'not placed (an earlier leg failed)' : 'FAILED ' + res[i].message}`).join(' | ');
     db.setBet(betId, status, detail);
     db.log(status === 'placed' ? 'info' : 'error', `[auto] ${title}: ${detail}`);

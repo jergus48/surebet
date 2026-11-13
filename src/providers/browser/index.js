@@ -4,7 +4,7 @@
 // Every book is read in parallel, then fixtures are grouped across books.
 const fs = require('fs');
 const path = require('path');
-const { mergeBooks } = require('./match');
+const { mergeBooks, swapSides } = require('./match');
 const SPORTS = require('./sports');
 const oddsapiio = require('../oddsapiio');
 const db = require('../../db');
@@ -133,7 +133,15 @@ async function addDetails(s, merged) {
       const t0 = Date.now();
       const got = await mod.details(s, links); // fresh cached details; a background queue fetches the rest
       let n = 0;
-      for (const e of want) { const extra = got.get(linkOf(e)); if (extra && extra.length) { e.odds.push(...extra); n++; } }
+      for (const e of want) {
+        const extra = got.get(linkOf(e));
+        if (!extra || !extra.length) continue;
+        // This book lists the match the other way round (its 1X2 was turned in mergeBooks): its extra
+        // markets must be turned the same way, or a "surebet" puts one team on both legs.
+        const swapped = e.odds.some(o => o.book === book && o.swapped);
+        e.odds.push(...(swapped ? swapSides({ odds: extra }).odds : extra));
+        n++;
+      }
       db.log('debug', `${book} details: ${n}/${links.length} matches, ${Date.now() - t0} ms`);
     } catch (e) {
       db.log('warn', `${book} details: ${e.message}`);

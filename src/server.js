@@ -47,6 +47,51 @@ function safeEq(a, b) {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 
+// Overview: money per book (balance now vs the first balance ever read, net of deposits / withdrawals
+// in the ledger) and the bets waiting for a result (payout per outcome, locked profit).
+function overview(s) {
+  const r2 = n => Math.round(n * 100) / 100;
+  const snap = balances.snapshot();
+  // Starting balance of a book: the last reading before its first placed bet (a top-up before betting
+  // started is not profit), else its first reading ever.
+  const placed = db.placedBets();
+  const firstBet = {};
+  for (const b of placed) for (const l of (b.legs && b.legs.legs) || []) if (l.placed !== false && (!firstBet[l.book] || b.created < firstBet[l.book])) firstBet[l.book] = b.created;
+  const first = Object.fromEntries(db.firstBalances().map(b => [b.book, b]));
+  for (const [book, ts] of Object.entries(firstBet)) { const x = db.balanceBefore(book, ts); if (x) first[book] = { book, amount: x.amount, ts: x.ts }; }
+  const ledger = db.ledger();
+  const net = {}; // deposits - withdrawals after the book's starting balance
+  for (const e of ledger) if (!first[e.book] || e.ts >= first[e.book].ts) net[e.book] = (net[e.book] || 0) + (e.type === 'deposit' ? e.amount : -e.amount);
+  const books = Object.entries(s.bookmakers).filter(([, b]) => b.enabled).map(([k, b]) => {
+    const now = snap[k] && snap[k].amount != null ? snap[k].amount : null;
+    const start = first[k] ? first[k].amount : null;
+    return { book: k, name: b.name || k, now, at: snap[k] ? snap[k].at : null, error: snap[k] ? snap[k].error : null, start, startAt: first[k] ? first[k].ts : null,
+      deposits: r2(net[k] || 0), change: now != null && start != null ? r2(now - start - (net[k] || 0)) : null };
+  });
+  const open = [], done = [];
+  for (const b of placed) {
+    const L = b.legs;
+    if (!L || !L.legs) { done.push({ id: b.id, created: b.created, status: b.status, detail: b.detail, legs: null }); continue; }
+    const legs = L.legs.filter(l => l.placed !== false);
+    const staked = r2(legs.reduce((a, l) => a + l.stake, 0));
+    const payouts = legs.map(l => r2(l.stake * l.price));
+    const minPay = payouts.length ? Math.min(...payouts) : 0;
+    const row = { id: b.id, created: b.created, status: b.status, detail: b.detail, ...L, legs: L.legs, staked, minPayout: r2(minPay), locked: r2(minPay - staked) };
+    // Waiting while the match can still be running (start + 3 h); after that the payout should be in the balance.
+    (L.start && Date.now() < L.start + 3 * 3600e3 ? open : done).push(row);
+  }
+  const known = books.filter(b => b.now != null);
+  const sum = k => r2(known.reduce((a, b) => a + (b[k] || 0), 0));
+  const openStake = r2(open.reduce((a, b) => a + b.staked, 0));
+  const openPayout = r2(open.reduce((a, b) => a + b.minPayout, 0));
+  return {
+    books, open, done: done.slice(0, 20),
+    totals: { now: sum('now'), start: r2(known.reduce((a, b) => a + (b.start ?? b.now), 0)), deposits: sum('deposits'),
+      change: r2(known.reduce((a, b) => a + (b.change || 0), 0)), openStake, openPayout, openLocked: r2(openPayout - openStake),
+      expected: r2(known.reduce((a, b) => a + (b.change || 0), 0) + openPayout), missing: books.filter(b => b.now == null).map(b => b.book) },
+  };
+}
+
 function decorate(row) {
   const sb = JSON.parse(row.json || '{}');
   return { ...sb, firstSeen: row.first_seen, lastSeen: row.last_seen, seenCount: row.seen_count, maxProfit: row.max_profit, notified: !!row.notified, label: marketLabel(sb) };
@@ -128,6 +173,7 @@ async function api(req, res, url) {
       if (p === '/api/calibrate/cancel') return send(res, 200, await calibration.cancel());
     } catch (e) { return send(res, 400, { error: e.message }); }
   }
+  if (p === '/api/overview') return send(res, 200, overview(s));
   if (p === '/api/money' && req.method === 'GET') {
     const entries = db.ledger();
     const latest = Object.fromEntries(Object.entries(balances.snapshot()).filter(([, v]) => v.amount != null).map(([k, v]) => [k, v.amount]));

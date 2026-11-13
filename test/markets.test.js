@@ -144,3 +144,19 @@ console.log('market tests passed');
   assert.ok(/not set up at doxxbet/.test(betAllowed(s, { ...sb, legs: [sb.legs[0], { ...sb.legs[1], pick: undefined }] })));
   console.log('pick gate tests passed');
 }
+
+// side check: a book's handicap / DNB sides must agree with its own 1X2 favourite (turned sides dropped)
+{
+  const { dropStale, findSurebets } = require('../src/arb');
+  const q = (book, market, sel, price, point = null) => ({ book, market, point, sel, price });
+  // Brazil clear favourite at DOXXbet (1.5 vs 6), but its handicap says Japan +0.5 is cheap: turned -> dropped
+  const odds = [q('doxxbet', 'h2h', '1', 1.5), q('doxxbet', 'h2h', 'X', 4.2), q('doxxbet', 'h2h', '2', 6),
+    q('doxxbet', 'spreads', 'H', 3.25, 0.5), q('doxxbet', 'spreads', 'A', 1.3, 0.5), q('doxxbet', 'dnb', '1', 4.5), q('doxxbet', 'dnb', '2', 1.15),
+    q('tipos', 'h2h', '1', 1.5), q('tipos', 'h2h', 'X', 4.3), q('tipos', 'h2h', '2', 6.2), q('tipos', 'spreads', 'H', 1.25, 0.5), q('tipos', 'spreads', 'A', 3.6, 0.5)];
+  const kept = dropStale(odds);
+  assert.ok(!kept.some(o => o.book === 'doxxbet' && /spreads|dnb/.test(o.market)));
+  assert.ok(kept.some(o => o.book === 'tipos' && o.market === 'spreads'));
+  const ev = { id: 'bj', sport: 'football', home: 'Brazília', away: 'Japonsko', drawPossible: true, start: 1, odds };
+  assert.ok(!findSurebets([ev], { minProfitPct: 1, bankroll: 30, step: 1 }).some(sb => sb.market === 'spreads' || sb.market === 'dnb'));
+  console.log('side check tests passed');
+}

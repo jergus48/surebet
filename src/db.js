@@ -44,6 +44,9 @@ db.exec(`
     note TEXT
   );
 `);
+// bets.legs: JSON { home, away, start, market, point, legs: [{ book, sel, price, stake, placed }] } of a
+// placed bet (added 2026-11-13; older rows have none).
+try { db.exec('ALTER TABLE bets ADD COLUMN legs TEXT'); } catch { /* already there */ }
 
 const q = {
   get: db.prepare('SELECT key FROM surebets WHERE key = ?'),
@@ -117,6 +120,14 @@ module.exports = {
   addBet: (key, mode, status, detail) => Number(q.addBet.run(key, Date.now(), mode, status, detail || '').lastInsertRowid),
   setBet: (id, status, detail) => q.setBet.run(status, detail || '', id),
   bets: (n = 200) => q.bets.all(n),
+  setBetLegs: (id, info) => db.prepare('UPDATE bets SET legs = ? WHERE id = ?').run(JSON.stringify(info), id),
+  // Bets where Place was clicked (placed, partial or unconfirmed), newest first, with their legs.
+  placedBets: () => db.prepare("SELECT * FROM bets WHERE status IN ('placed','partial','unconfirmed') ORDER BY id DESC").all()
+    .map(b => ({ ...b, legs: b.legs ? JSON.parse(b.legs) : null })),
+  // Last balance read before a moment (the starting point of a book: before its first bet).
+  balanceBefore: (book, ts) => db.prepare('SELECT amount, ts FROM balances WHERE book = ? AND ts < ? ORDER BY ts DESC LIMIT 1').get(book, ts) || null,
+  // First balance ever read per book (the starting point for profit) and the latest one.
+  firstBalances: () => db.prepare('SELECT b.book, b.amount, b.ts FROM balances b JOIN (SELECT book, MIN(ts) t FROM balances GROUP BY book) f ON f.book = b.book AND f.t = b.ts').all(),
   // Bet attempts on one match (surebet keys start with the event id): { n, last, placed }
   eventBets: eventId => {
     const rows = db.prepare("SELECT created, status FROM bets WHERE substr(surebet_key, 1, ?) = ?").all(eventId.length + 1, eventId + '|');

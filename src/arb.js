@@ -93,6 +93,24 @@ function dropStale(odds) {
     const against = others.filter(b => fav[b] !== fav[book]).length;
     if (against >= 2 && others.every(b => fav[b] !== fav[book])) for (const o of h2h) if (o.book === book && ['1', 'X', '2'].includes(o.sel)) drop.add(o);
   }
+  // Side check against the book's OWN 1X2: when one side is the clear favourite (20 %+ apart), that side
+  // must also be the cheaper one in draw no bet and in the +-0.5 handicap at the same book. A market
+  // that says the opposite has its sides turned (a match listed the other way round and not turned
+  // with it: Brasília - Japonsko showed 7-20 % "surebets" with one team on both legs, 2026-11-13).
+  for (const book of Object.keys(fav)) {
+    const p1 = at(book, '1').price, p2 = at(book, '2').price;
+    const clear = p1 * 1.2 <= p2 ? '1' : p2 * 1.2 <= p1 ? '2' : null;
+    if (!clear) continue;
+    const mine = odds.filter(o => o.book === book);
+    const dnb1 = mine.find(o => o.market === 'dnb' && o.sel === '1'), dnb2 = mine.find(o => o.market === 'dnb' && o.sel === '2');
+    if (dnb1 && dnb2 && (clear === '1' ? dnb1.price > dnb2.price : dnb2.price > dnb1.price)) { drop.add(dnb1); drop.add(dnb2); }
+    for (const l of [0.5, -0.5]) {
+      const h = mine.find(o => o.market === 'spreads' && o.point === l && o.sel === 'H'), a = mine.find(o => o.market === 'spreads' && o.point === l && o.sel === 'A');
+      if (h && a && (clear === '1' ? h.price > a.price : a.price > h.price)) {
+        for (const o of mine) if (/^(spreads|home_totals|away_totals|dnb)$/.test(o.market)) drop.add(o); // the whole side-based set is suspect
+      }
+    }
+  }
   return drop.size ? odds.filter(o => !drop.has(o)) : odds;
 }
 

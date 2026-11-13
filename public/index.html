@@ -69,6 +69,17 @@
 </header>
 <main>
   <section id="t-overview">
+    <div class="card">
+      <h3 style="margin-top:0">Peniaze</h3>
+      <div class="grid" id="ovMoney"></div>
+      <div class="scroll" style="margin-top:10px"><table id="ovBooks"></table></div>
+      <p class="muted" id="ovNote"></p>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Stávky čakajúce na výsledok</h3>
+      <div class="scroll"><table id="ovOpen"></table></div>
+      <details style="margin-top:8px"><summary class="muted">Skončené / staršie stávky</summary><div class="scroll"><table id="ovDone"></table></div></details>
+    </div>
     <div class="card grid" id="kpis"></div>
     <div class="card">
       <div class="row">
@@ -345,6 +356,38 @@ function matchHtml(sb) {
   return `${esc(sb.home)} – ${esc(sb.away)}${sb.live ? '<span class="tag">LIVE</span>' : ''}<div class="muted">${esc(sb.league)} · ${dt(sb.start)}</div>`;
 }
 
+// Overview: money (balance now vs start, profit, money in open bets) and the bets waiting for a result.
+const eur = v => (v == null ? '–' : (Math.round(v * 100) / 100).toFixed(2) + ' €');
+const sgnEur = v => (v == null ? '–' : `<span class="${v >= 0 ? 'green' : 'red'}">${v >= 0 ? '+' : ''}${eur(v)}</span>`);
+const SEL_SK = { '1': '1 (domáci)', X: 'X (remíza)', '2': '2 (hostia)', '1X': '1X', X2: 'X2', '12': '12', O: 'viac', U: 'menej', H: 'domáci', A: 'hostia', Y: 'áno', N: 'nie' };
+function legLine(b, l) {
+  const what = b.market === 'h2h' ? SEL_SK[l.sel] || l.sel : `${b.market}${b.point != null ? ' ' + b.point : ''} ${SEL_SK[l.sel] || l.sel}`;
+  const flag = l.placed === false ? ' <span class="red">nepodaná</span>' : l.byHand ? ' <span class="muted">(ručne)</span>' : '';
+  return `${esc(l.book)}: ${esc(what)} @ ${l.price} · ${eur(l.stake)}${flag}`;
+}
+function betRow(b) {
+  if (!b.legs) return `<tr><td>#${b.id}</td><td colspan="5" class="muted">${esc(b.detail)}</td></tr>`;
+  return `<tr><td>#${b.id}<div class="muted">${dt(b.created)}</div></td>
+    <td>${esc(b.home)} – ${esc(b.away)}${b.live ? '<span class="tag">LIVE</span>' : ''}<div class="muted">začiatok ${dt(b.start)}</div></td>
+    <td>${b.legs.map(l => legLine(b, l)).join('<br>')}</td>
+    <td>${eur(b.staked)}</td><td>${eur(b.minPayout)}</td><td>${sgnEur(b.locked)}${b.status !== 'placed' ? `<div class="amber">${esc(b.status)}</div>` : ''}</td></tr>`;
+}
+function renderOverview(o) {
+  const t = o.totals;
+  $('ovMoney').innerHTML = [
+    ['Spolu teraz na účtoch', eur(t.now)], ['Na začiatku', eur(t.start)], ['Zisk (zostatky)', sgnEur(t.change)],
+    ['V otvorených stávkach', eur(t.openStake)], ['Istá výplata otvorených', eur(t.openPayout)], ['Zisk vrátane otvorených', sgnEur(t.expected)],
+  ].map(([l, v]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+  $('ovBooks').innerHTML = '<tr><th>Stávkovka</th><th>Teraz</th><th>Na začiatku</th><th>Vklady − výbery</th><th>Zmena</th><th>Načítané</th></tr>' +
+    o.books.map(b => `<tr><td><b>${esc(b.name)}</b></td><td>${b.now == null ? `<span class="red">${esc(b.error || 'nenačítané')}</span>` : eur(b.now)}</td>
+      <td>${eur(b.start)}</td><td>${b.deposits ? eur(b.deposits) : '–'}</td><td>${sgnEur(b.change)}</td><td class="muted">${b.at ? dt(b.at) : '–'}</td></tr>`).join('');
+  $('ovNote').innerHTML = `Zisk = zostatok teraz − prvý načítaný zostatok − vklady + výbery (z tabuľky Money v History). Peniaze v otvorených stávkach sú zo zostatku odpočítané, kým sa zápas neskončí: preto je tu aj „zisk vrátane otvorených“ (s istou výplatou surebetov).` +
+    (t.missing.length ? ` <span class="amber">Bez zostatku: ${esc(t.missing.join(', '))} (do súčtov nezapočítané).</span>` : '');
+  const head = '<tr><th>#</th><th>Zápas</th><th>Nohy</th><th>Vklad</th><th>Istá výplata</th><th>Istý zisk</th></tr>';
+  $('ovOpen').innerHTML = head + (o.open.length ? o.open.map(betRow).join('') : '<tr><td colspan="6" class="muted">Žiadna stávka nečaká na výsledok.</td></tr>');
+  $('ovDone').innerHTML = head + (o.done.length ? o.done.map(betRow).join('') : '<tr><td colspan="6" class="muted">Zatiaľ nič.</td></tr>');
+}
+
 async function refresh() {
   if (tab === 'settings') return;
   const st = await get('/api/status');
@@ -352,6 +395,7 @@ async function refresh() {
   $('scanPill').textContent = 'Scanner: ' + (st.running ? 'running' : 'stopped');
 
   if (tab === 'overview') {
+    renderOverview(await get('/api/overview'));
     const c = st.credits || {};
     $('kpis').innerHTML = [
       ['Active surebets', st.activeCount], ['Matches in last scan', st.lastEvents],
