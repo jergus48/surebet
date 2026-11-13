@@ -278,6 +278,14 @@ const server = http.createServer(async (req, res) => {
 });
 
 const s = config.load();
+// The dashboard can switch auto betting on and shows tokens: it listens beyond this computer only with
+// a password set (this Mac has a public IP: 0.0.0.0 would open it to the whole internet). For the phone
+// use Tailscale ("tailscale serve 8080" keeps it on 127.0.0.1 and private to your own devices).
+const LOCAL = ['127.0.0.1', 'localhost', '::1'];
+if (!LOCAL.includes(String(s.host)) && !s.dashboardPassword) {
+  db.log('warn', `host ${s.host} needs a dashboard password (Settings): listening on 127.0.0.1 only`);
+  s.host = '127.0.0.1';
+}
 server.listen(s.port, s.host, () => {
   db.log('info', `dashboard on http://${s.host === '0.0.0.0' ? 'localhost' : s.host}:${s.port} (provider: ${s.provider}, betMode: ${s.betMode})`);
   if (process.env.AUTOSTART !== '0') { scanner.start(); balances.start(); require('./memwatch').start(); }

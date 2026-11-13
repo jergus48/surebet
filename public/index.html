@@ -19,6 +19,7 @@
   main { padding:16px; max-width:1100px; margin:0 auto; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+  @media (max-width: 520px) { .grid { grid-template-columns:1fr 1fr; gap:8px; } .kpi .v { font-size:20px; } main { padding-left:10px; padding-right:10px; } }
   .kpi .v { font-size:24px; font-weight:700; } .kpi .l { color:var(--muted); font-size:13px; }
   table { width:100%; border-collapse:collapse; }
   th, td { padding:9px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
@@ -70,15 +71,15 @@
 <main>
   <section id="t-overview">
     <div class="card">
-      <h3 style="margin-top:0">Peniaze</h3>
+      <h3 style="margin-top:0">Money</h3>
       <div class="grid" id="ovMoney"></div>
       <div class="scroll" style="margin-top:10px"><table id="ovBooks"></table></div>
       <p class="muted" id="ovNote"></p>
     </div>
     <div class="card">
-      <h3 style="margin-top:0">Stávky čakajúce na výsledok</h3>
+      <h3 style="margin-top:0">Bets waiting for a result</h3>
       <div class="scroll"><table id="ovOpen"></table></div>
-      <details style="margin-top:8px"><summary class="muted">Skončené / staršie stávky</summary><div class="scroll"><table id="ovDone"></table></div></details>
+      <details style="margin-top:8px"><summary class="muted">Finished / older bets</summary><div class="scroll"><table id="ovDone"></table></div></details>
     </div>
     <div class="card grid" id="kpis"></div>
     <div class="card">
@@ -359,33 +360,33 @@ function matchHtml(sb) {
 // Overview: money (balance now vs start, profit, money in open bets) and the bets waiting for a result.
 const ovEur = v => (v == null ? '–' : (Math.round(v * 100) / 100).toFixed(2) + ' €');
 const ovSgn = v => (v == null ? '–' : `<span class="${v >= 0 ? 'green' : 'red'}">${v >= 0 ? '+' : ''}${ovEur(v)}</span>`);
-const SEL_SK = { '1': '1 (domáci)', X: 'X (remíza)', '2': '2 (hostia)', '1X': '1X', X2: 'X2', '12': '12', O: 'viac', U: 'menej', H: 'domáci', A: 'hostia', Y: 'áno', N: 'nie' };
+const SEL_EN = { '1': '1 (home)', X: 'X (draw)', '2': '2 (away)', '1X': '1X', X2: 'X2', '12': '12', O: 'over', U: 'under', H: 'home', A: 'away', Y: 'yes', N: 'no' };
 function legLine(b, l) {
-  const what = b.market === 'h2h' ? SEL_SK[l.sel] || l.sel : `${b.market}${b.point != null ? ' ' + b.point : ''} ${SEL_SK[l.sel] || l.sel}`;
-  const flag = l.placed === false ? ' <span class="red">nepodaná</span>' : l.byHand ? ' <span class="muted">(ručne)</span>' : '';
+  const what = b.market === 'h2h' ? SEL_EN[l.sel] || l.sel : `${b.market}${b.point != null ? ' ' + b.point : ''} ${SEL_EN[l.sel] || l.sel}`;
+  const flag = l.placed === false ? ' <span class="red">not placed</span>' : l.byHand ? ' <span class="muted">(by hand)</span>' : '';
   return `${esc(l.book)}: ${esc(what)} @ ${l.price} · ${ovEur(l.stake)}${flag}`;
 }
 function betRow(b) {
   if (!b.legs) return `<tr><td>#${b.id}</td><td colspan="5" class="muted">${esc(b.detail)}</td></tr>`;
   return `<tr><td>#${b.id}<div class="muted">${dt(b.created)}</div></td>
-    <td>${esc(b.home)} – ${esc(b.away)}${b.live ? '<span class="tag">LIVE</span>' : ''}<div class="muted">začiatok ${dt(b.start)}</div></td>
+    <td>${esc(b.home)} – ${esc(b.away)}${b.live ? '<span class="tag">LIVE</span>' : ''}<div class="muted">kick-off ${dt(b.start)}</div></td>
     <td>${b.legs.map(l => legLine(b, l)).join('<br>')}</td>
     <td>${ovEur(b.staked)}</td><td>${ovEur(b.minPayout)}</td><td>${ovSgn(b.locked)}${b.status !== 'placed' ? `<div class="amber">${esc(b.status)}</div>` : ''}</td></tr>`;
 }
 function renderOverview(o) {
   const t = o.totals;
   $('ovMoney').innerHTML = [
-    ['Spolu teraz na účtoch', ovEur(t.now)], ['Na začiatku', ovEur(t.start)], ['Zmena zostatkov (bez otvorených)', ovSgn(t.change)],
-    ['V otvorených stávkach', ovEur(t.openStake)], ['Istá výplata otvorených', ovEur(t.openPayout)], ['Zisk vrátane otvorených', ovSgn(t.expected)],
+    ['In the accounts now', ovEur(t.now)], ['At the start', ovEur(t.start)], ['Balance change (open bets not back yet)', ovSgn(t.change)],
+    ['Staked in open bets', ovEur(t.openStake)], ['Guaranteed payout of open bets', ovEur(t.openPayout)], ['Profit incl. open bets', ovSgn(t.expected)],
   ].map(([l, v]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
-  $('ovBooks').innerHTML = '<tr><th>Stávkovka</th><th>Teraz</th><th>Na začiatku</th><th>Vklady − výbery</th><th>Zmena</th><th>Načítané</th></tr>' +
-    o.books.map(b => `<tr><td><b>${esc(b.name)}</b></td><td>${b.now == null ? `<span class="red">${esc(b.error || 'nenačítané')}</span>` : ovEur(b.now)}</td>
+  $('ovBooks').innerHTML = '<tr><th>Bookmaker</th><th>Now</th><th>At the start</th><th>Deposits − withdrawals</th><th>Change</th><th>Read at</th></tr>' +
+    o.books.map(b => `<tr><td><b>${esc(b.name)}</b></td><td>${b.now == null ? `<span class="red">${esc(b.error || 'not read')}</span>` : ovEur(b.now)}</td>
       <td>${ovEur(b.start)}</td><td>${b.deposits ? ovEur(b.deposits) : '–'}</td><td>${ovSgn(b.change)}</td><td class="muted">${b.at ? dt(b.at) : '–'}</td></tr>`).join('');
-  $('ovNote').innerHTML = `Na začiatku = zostatok tesne pred prvou stávkou na tej stávkovke. Zmena = teraz − na začiatku − vklady + výbery (tabuľka Money v History). Peniaze v otvorených stávkach sú zo zostatku odpočítané, kým sa zápas neskončí: preto je tu aj „zisk vrátane otvorených“ (s istou výplatou surebetov).` +
-    (t.missing.length ? ` <span class="amber">Bez zostatku: ${esc(t.missing.join(', '))} (do súčtov nezapočítané).</span>` : '');
-  const head = '<tr><th>#</th><th>Zápas</th><th>Nohy</th><th>Vklad</th><th>Istá výplata</th><th>Istý zisk</th></tr>';
-  $('ovOpen').innerHTML = head + (o.open.length ? o.open.map(betRow).join('') : '<tr><td colspan="6" class="muted">Žiadna stávka nečaká na výsledok.</td></tr>');
-  $('ovDone').innerHTML = head + (o.done.length ? o.done.map(betRow).join('') : '<tr><td colspan="6" class="muted">Zatiaľ nič.</td></tr>');
+  $('ovNote').innerHTML = `At the start = the balance right before the first bet at that bookmaker. Change = now − at the start − deposits + withdrawals (Money table under History). Money in open bets is out of the balance until the match ends, hence "profit incl. open bets" (with the surebets' guaranteed payout).` +
+    (t.missing.length ? ` <span class="amber">No balance: ${esc(t.missing.join(', '))} (left out of the totals).</span>` : '');
+  const head = '<tr><th>#</th><th>Match</th><th>Legs</th><th>Stake</th><th>Guaranteed payout</th><th>Locked profit</th></tr>';
+  $('ovOpen').innerHTML = head + (o.open.length ? o.open.map(betRow).join('') : '<tr><td colspan="6" class="muted">No bet is waiting for a result.</td></tr>');
+  $('ovDone').innerHTML = head + (o.done.length ? o.done.map(betRow).join('') : '<tr><td colspan="6" class="muted">Nothing yet.</td></tr>');
 }
 
 async function refresh() {
