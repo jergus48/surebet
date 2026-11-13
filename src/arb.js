@@ -96,6 +96,19 @@ function dropStale(odds) {
   return drop.size ? odds.filter(o => !drop.has(o)) : odds;
 }
 
+// Between the books of one surebet: a book whose 1/2 prices make home the clear favourite (20 %+
+// apart) while another book makes away the clear favourite.
+function flippedFavourite(odds, books) {
+  const fav = [];
+  for (const b of new Set(books)) {
+    const p1 = odds.find(o => o.book === b && o.market === 'h2h' && o.sel === '1');
+    const p2 = odds.find(o => o.book === b && o.market === 'h2h' && o.sel === '2');
+    if (!p1 || !p2) continue;
+    if (p1.price * 1.2 <= p2.price) fav.push('1'); else if (p2.price * 1.2 <= p1.price) fav.push('2');
+  }
+  return fav.includes('1') && fav.includes('2');
+}
+
 function findSurebets(events, opts = {}) {
   const { minProfitPct = 0, maxProfitPct = 100, books = null, bankroll = 100, step = 1, includeLive = true, maxAgeMs = 0, now = Date.now(), stakeTiers = null } = opts;
   const out = [];
@@ -142,6 +155,8 @@ function findSurebets(events, opts = {}) {
           const leg = { book: l.book, sel: l.sel, price: l.price, link: l.link || null, linkGeneric: !!l.linkGeneric, updated: l.updated || null, stake: st.stakes[i], ref, outlier };
           // pick: the exact button of this price on the book's match page (extra markets from match details)
           if (l.pick) leg.pick = l.pick;
+          // listed the other way round at this book: its own name for the pick (bettor clicks that)
+          if (l.swapped) Object.assign(leg, { bookSel: l.bookSel, bookPoint: l.bookPoint, swapped: true });
           // The book's own spelling of the teams, when its reader gives one (bet365 is in German).
           if (l.home && l.away) Object.assign(leg, { home: l.home, away: l.away });
           return leg;
@@ -162,6 +177,9 @@ function findSurebets(events, opts = {}) {
           legs: legOut,
           // A leg far above the other books is usually a stale line, not a bettable edge.
           suspect: legOut.some(l => l.outlier),
+          // The books in this surebet clearly disagree who the favourite is: almost always two different
+          // teams paired as one match ("Japonsko 1" vs "Japonsko 2") or swapped home/away. Never bet.
+          flipped: flippedFavourite(ev.odds, legOut.map(l => l.book)),
           staked: st.staked,
           worstProfit: Math.round(st.worstProfit * 100) / 100,
         });
@@ -190,4 +208,4 @@ function marketLabel(sb) {
   return sb.market;
 }
 
-module.exports = { findSurebets, stakes, bestSplit, marketLabel, dropStale, SMALL_STEP, SMALL_MIN_LEG };
+module.exports = { findSurebets, stakes, bestSplit, marketLabel, dropStale, flippedFavourite, SMALL_STEP, SMALL_MIN_LEG };

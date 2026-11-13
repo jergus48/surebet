@@ -66,3 +66,61 @@ assert.deepStrictEqual(by['Shelton B.-Paul T.'].books.sort(), ['bet365', 'nike',
 assert.deepStrictEqual(by['Turecko-Belgicko'].books.sort(), ['bet365', 'nike', 'tipsport']);
 assert.deepStrictEqual(by['Arménsko-Cyprus'].books.sort(), ['bet365', 'tipsport']); // the tennis "Armenien" stays out
 console.log('match tests passed');
+
+// Team numbers: "Japonsko 1" and "Japonsko 2" are different teams (a fake surebet was bet on that, 2026-11)
+assert.strictEqual(sim('Japonsko 1', 'Japonsko 2'), 0);
+assert.strictEqual(sim('Japonsko', 'Japonsko 2'), 0);
+assert.strictEqual(sim('Japan 1', 'Japonsko 1'), 1);
+assert.strictEqual(sim('Hannover 96', 'Hannover'), 1);
+{
+  const t1 = Date.parse('2026-11-14T12:00:00Z');
+  const m2 = mergeBooks([
+    [{ book: 'tipsport', sport: 'football', home: 'Rakúsko', away: 'Japonsko 1', start: t1, odds: [{ book: 'tipsport', market: 'h2h', sel: '1', price: 3 }] }],
+    [{ book: 'fortuna', sport: 'football', home: 'Rakúsko', away: 'Japonsko 2', start: t1, odds: [{ book: 'fortuna', market: 'h2h', sel: '2', price: 3 }] }],
+  ]);
+  assert.strictEqual(m2.length, 0);
+}
+// second guard: books disagreeing who the favourite is never get a bet
+{
+  const { findSurebets } = require('../src/arb');
+  const { betAllowed } = require('../src/bettor');
+  const ev = { id: 'x', sport: 'tennis', home: 'A', away: 'B', drawPossible: false, start: 1, odds: [
+    { book: 'tipsport', market: 'h2h', sel: '1', price: 1.4 }, { book: 'tipsport', market: 'h2h', sel: '2', price: 2.9 },
+    { book: 'nike', market: 'h2h', sel: '1', price: 3.1 }, { book: 'nike', market: 'h2h', sel: '2', price: 1.35 }] };
+  const [sb] = findSurebets([ev], { minProfitPct: 1, bankroll: 30, step: 1 });
+  assert.ok(sb && sb.flipped);
+  assert.ok(/favourite/.test(betAllowed({ autoMinProfitPct: 3, autoBetSuspect: true }, sb)));
+  console.log('team number / flipped favourite tests passed');
+}
+
+// The same match listed the other way round: paired, and that book's picks turned to the group's sides
+// (its "1" = Japan = the group's "2"). The surebet must never put Japan on both legs.
+{
+  const { findSurebets } = require('../src/arb');
+  const t2 = Date.parse('2026-11-14T12:00:00Z');
+  const q = (book, sel, price, extra = {}) => ({ book, market: 'h2h', sel, price, ...extra });
+  const m3 = mergeBooks([
+    [{ book: 'nike', sport: 'football', home: 'Rakúsko', away: 'Japonsko', start: t2, odds: [q('nike', '1', 2.0), q('nike', 'X', 3.4), q('nike', '2', 4.2)] }],
+    [{ book: 'tipsport', sport: 'football', home: 'Japonsko', away: 'Rakúsko', start: t2, odds: [q('tipsport', '1', 4.4), q('tipsport', 'X', 3.5), q('tipsport', '2', 1.95),
+      { book: 'tipsport', market: 'spreads', point: -0.5, sel: 'H', price: 4.3 }, { book: 'tipsport', market: 'home_totals', point: 0.5, sel: 'O', price: 1.5 }] }],
+  ]);
+  assert.strictEqual(m3.length, 1);
+  const tp = m3[0].odds.filter(o => o.book === 'tipsport');
+  const at = (mk, sel) => tp.find(o => o.market === mk && o.sel === sel);
+  assert.strictEqual(at('h2h', '2').price, 4.4);   // Japan win = the group's away
+  assert.strictEqual(at('h2h', '2').bookSel, '1'); // what Tipsport calls it
+  assert.strictEqual(at('h2h', '1').price, 1.95);  // Austria win
+  assert.deepStrictEqual([at('spreads', 'A').point, at('spreads', 'A').bookSel, at('spreads', 'A').bookPoint], [0.5, 'H', -0.5]);
+  assert.ok(at('away_totals', 'O'));               // Japan's goals = the away team's goals
+  const sbs = findSurebets([{ ...m3[0], drawPossible: true }], { minProfitPct: 0, bankroll: 30 });
+  for (const sb of sbs) {
+    const japanLegs = sb.legs.filter(l => (l.book === 'tipsport' ? l.bookSel === '1' : l.sel === '2'));
+    assert.ok(japanLegs.length <= 1, 'Japan on both legs: ' + JSON.stringify(sb.legs));
+    assert.ok(!sb.flipped);
+  }
+  // weak evidence never pairs swapped
+  assert.strictEqual(mergeBooks([
+    [{ book: 'nike', sport: 'football', home: 'Slavia', away: 'Sparta', start: t2, odds: [q('nike', '1', 2)] }],
+    [{ book: 'tipsport', sport: 'football', home: 'Sparta B', away: 'Slavia', start: t2, odds: [q('tipsport', '1', 2)] }]]).length, 0);
+  console.log('swapped sides tests passed');
+}

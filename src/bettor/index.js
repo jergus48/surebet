@@ -234,11 +234,14 @@ function checkSlip(prices, price, maxDropPct = 0) {
 async function priceButton(page, site, leg, names) {
   const S = site.selectors;
   await page.waitForSelector(S.oddsButton, { timeout: 15000 });
+  // site.matchScope: the block that holds only this match's odds (Tipos / Synottip match pages also
+  // list other live matches, and one of those once had the same price: the wrong match was clicked).
+  const scope = site.matchScope && (await page.$(site.matchScope)) ? site.matchScope + ' ' : '';
   const texts = priceTexts(leg.price);
   const found = [];
   const offScreen = []; // matching price, but scrolled away in a carousel
   const onScreen = h => h.evaluate(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; });
-  for (const h of await page.$$(S.oddsButton)) {
+  for (const h of await page.$$(S.oddsButton.split(',').map(x => scope + x.trim()).join(', '))) {
     const t = (await h.evaluate(el => el.innerText || '')).trim();
     // The price ends the button's text ("1\n1.59"), not just its digits: "2\n11.59" is not 1.59.
     if (!texts.some(x => t === x || (t.endsWith(x) && !/[\d.,]/.test(t[t.length - x.length - 1])))) continue;
@@ -296,8 +299,13 @@ const MARKET_UI = {
   ot_spreads: (sb, l) => ({ game: ['Handicap (vrátane predĺženia a nájazdov)'], label: l.sel === 'H' ? `Tím 1 (${sgn(sb.point)})` : `Tím 2 (${sgn(-sb.point)})` }),
 };
 
-async function marketButton(page, site, sb, leg) {
+// The pick as the book itself names it (a match listed the other way round at this book has its
+// sides swapped in the surebet: its own "Tím 2" is the surebet's "H").
+const bookView = (sb, leg) => (leg.swapped ? [{ ...sb, point: leg.bookPoint, market: sb.market.replace(/^(home|away)_/, m => (m === 'home_' ? 'away_' : 'home_')) }, { ...leg, sel: leg.bookSel }] : [sb, leg]);
+
+async function marketButton(page, site, sbIn, legIn) {
   const ui = site.marketUI;
+  const [sb, leg] = bookView(sbIn, legIn);
   const spec = ui && MARKET_UI[sb.market] && MARKET_UI[sb.market](sb, leg);
   if (!spec) throw new Error(`${leg.book}: betting the ${sb.market} market is not set up for this site`);
   await page.waitForSelector(ui.game, { timeout: 15000 });
@@ -514,7 +522,8 @@ async function prepareLeg(settings, sb, leg) {
         const ok = flat.includes(lbl) || (flat.includes(lbl.split(' ')[0]) && nums.every(n => flat.includes(n) || flat.includes(n.replace('.', ','))));
         if (!ok) throw new Error(`${leg.book}: the slip shows "${slipText.replace(/\s+/g, ' ').slice(0, 80)}", not "${leg.pickText}"`);
       } else if (sb.market && sb.market !== 'h2h' && MARKET_UI[sb.market]) {
-        const spec = MARKET_UI[sb.market](sb, leg);
+        const [bsb, bleg] = bookView(sb, leg);
+        const spec = MARKET_UI[bsb.market](bsb, bleg);
         const flat = slipText.replace(/\s+/g, ' ');
         if (!spec.game.some(g => flat.includes(g)) || !flat.includes(spec.label)) throw new Error(`${leg.book}: the slip shows "${flat.slice(0, 80)}", not ${spec.game[0]} / ${spec.label}`);
       }
@@ -575,6 +584,7 @@ function betAllowed(settings, sb) {
   }
   // Suspect = one price far above the other books. With autoBetSuspect it is still bet: the price
   // actually shown on every slip is re-checked against the minimum before Place.
+  if (sb.flipped) return 'the books disagree who the favourite is (likely two different teams): never bet';
   if (sb.suspect && !settings.autoBetSuspect) return 'suspect: a price is far above the other books (likely stale)';
   if (settings.autoPrematchOnly && sb.live) return 'live: pre-match only';
   return null;

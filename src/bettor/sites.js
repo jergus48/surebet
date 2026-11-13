@@ -73,6 +73,7 @@ const TIPOS_SLIP = {
 // ("Nad (2.5) 1,76"). marketUI lets the bettor click other markets by name and label (bettor
 // MARKET_UI); betMarkets = the markets whose clicking was tested on the site (dry run, never placed).
 const TIPOS_MARKETS = {
+  matchScope: '[data-test-role="event-detail"]', // the match's own odds (live pages also list other matches)
   marketUI: { tabs: '[data-test-role="game-group-tabs__item"]', game: '[data-test-role="event-game"]', button: '[data-test-role="rate"]' },
   // Tested 2026-11-13 on both sites (filled, never placed): totals, handicap, BTTS, draw no bet; 1st-half
   // totals use the same block layout and labels.

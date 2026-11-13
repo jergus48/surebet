@@ -47,6 +47,14 @@ function markers(name) {
   // Trailing bare "B" (no dot) = B team, e.g. "Komárno B". Initials always carry
   // a dot in these books' formats ("Shelton B.").
   if (/\S{3,}\s+B$/.test(String(name).trim()) && !m.includes('res')) m.push('res');
+  // Team number at the end: "Japonsko 1" and "Japonsko 2" are two different teams (one book wrote
+  // "Rakúsko - Japonsko 1", another "Rakúsko - Japonsko 2": paired, it showed a fake surebet and was
+  // bet, 2026-11). The number must be the same on both books, and a name with a number never pairs
+  // with the same name without one. Only 1-9 and I / III / IV (II is "reserves" above); two-digit
+  // club numbers ("Hannover 96") and age teams ("Island 21" -> U21, names.js) are not team numbers.
+  const raw = String(preRaw(name)).trim();
+  const tn = /\S\s+([1-9]|I|III|IV)$/.exec(raw);
+  if (tn && !/\bu\d{2}$/.test(norm(name))) m.push(`team${tn[1].toUpperCase()}`);
   return m.sort().join(',');
 }
 function tokens(name) {
@@ -78,6 +86,28 @@ function sim(a, b) {
 
 // lists: array of event arrays (one per bookmaker or source).
 // Returns groups seen at >= 2 bookmakers, as events with all their odds.
+// A book that lists the match the other way round: its picks are turned to the group's sides, so its
+// "1" (its home team) becomes "2" when that team is the group's away team. Without this, a book's
+// "Japonsko 1" and another's "Japonsko 2" look like opposite outcomes while both are Japan to win
+// (the same bet twice, a fake surebet). bookSel / bookPoint keep what the book itself calls the pick,
+// for clicking its own button.
+const SWAP_SEL = { '1': '2', '2': '1', '1X': 'X2', X2: '1X', H: 'A', A: 'H' };
+const SWAP_MARKET = { home_totals: 'away_totals', away_totals: 'home_totals' };
+function swapSides(ev) {
+  const odds = ev.odds.map(o => {
+    const spread = /spreads$/.test(o.market);
+    const sideSel = ['h2h', '1h_h2h', 'dnb', 'ot_h2h', 'set1_h2h'].includes(o.market) || spread;
+    return {
+      ...o,
+      market: SWAP_MARKET[o.market] || o.market,
+      sel: sideSel ? (SWAP_SEL[o.sel] || o.sel) : o.sel,
+      point: spread && o.point != null ? -o.point : o.point,
+      bookSel: o.sel, bookPoint: o.point, swapped: true,
+    };
+  });
+  return { ...ev, home: ev.away, away: ev.home, odds, swapped: true };
+}
+
 function mergeBooks(lists, log = () => { }) {
   const aliases = loadAliases();
   const al = n => aliases[n] || n;
@@ -87,14 +117,20 @@ function mergeBooks(lists, log = () => { }) {
       // A live event without a kick-off time (Bet365 In-Play) pairs with live groups by names only.
       const near = g => (g.start == null || ev.start == null ? g.live && ev.live : Math.abs(g.start - ev.start) <= MAX_DT);
       const win = groups.filter(g => g.sport === ev.sport && near(g) && !g.books.has(ev.book));
-      let best = null, bestScore = 0;
+      let best = null, bestScore = 0, bestSwapped = false;
       for (const g of win) {
-        let sh = 0, sa = 0;
-        for (const m of g.members) { sh = Math.max(sh, sim(al(ev.home), al(m.home))); sa = Math.max(sa, sim(al(ev.away), al(m.away))); }
-        if (sh >= 0.5 && sa >= 0.5 && sh + sa > bestScore) { best = g; bestScore = sh + sa; }
+        let sh = 0, sa = 0, xh = 0, xa = 0;
+        for (const m of g.members) {
+          sh = Math.max(sh, sim(al(ev.home), al(m.home))); sa = Math.max(sa, sim(al(ev.away), al(m.away)));
+          // the same match listed the other way round ("Japonsko - Rakúsko" vs "Rakúsko - Japonsko")
+          xh = Math.max(xh, sim(al(ev.home), al(m.away))); xa = Math.max(xa, sim(al(ev.away), al(m.home)));
+        }
+        if (sh >= 0.5 && sa >= 0.5 && sh + sa > bestScore) { best = g; bestScore = sh + sa; bestSwapped = false; }
+        // a swapped pairing needs clear evidence on both sides, and must beat the straight reading
+        if (xh >= 0.8 && xa >= 0.8 && xh + xa > bestScore && xh + xa > sh + sa) { best = g; bestScore = xh + xa; bestSwapped = true; }
       }
       if (best) {
-        best.members.push(ev);
+        best.members.push(bestSwapped ? swapSides(ev) : ev);
         best.books.add(ev.book);
         if (best.start == null && ev.start != null) best.start = ev.start;
       } else {
@@ -118,4 +154,4 @@ function mergeBooks(lists, log = () => { }) {
   return out;
 }
 
-module.exports = { mergeBooks, sim, tokens };
+module.exports = { mergeBooks, sim, tokens, swapSides };
