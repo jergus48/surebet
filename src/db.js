@@ -133,6 +133,13 @@ module.exports = {
     const rows = db.prepare("SELECT created, status FROM bets WHERE substr(surebet_key, 1, ?) = ?").all(eventId.length + 1, eventId + '|');
     return { n: rows.length, last: Math.max(0, ...rows.map(r => r.created)), placed: rows.some(r => /^(placed|partial|unconfirmed|pending)$/.test(r.status)) };
   },
+  // Today's bets (Place clicked) per bookmaker, e.g. { chance: 3, nike: 1 }: a bet counts once for every
+  // book where a leg was placed.
+  betsTodayByBook: () => {
+    const out = {};
+    for (const [combo, n] of Object.entries(module.exports.betsTodayByCombo())) for (const b of combo.split('+')) out[b] = (out[b] || 0) + n;
+    return out;
+  },
   // Today's bets (Place clicked) per bookmaker combination, e.g. { 'chance+synottip': 2 }. A bet's books
   // come from its stored legs, or from its detail ("tipsport: PLACED | doxxbet: PLACED") for older rows.
   betsTodayByCombo: () => {

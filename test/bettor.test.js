@@ -183,6 +183,8 @@ console.log('bettor tests passed');
   const autoAllowedLike = s => require('../src/bettor').execute; // (execute calls autoAllowed internally)
   const counts = db.betsTodayByCombo();
   assert.ok(counts['chance+synottip'] >= 3);
+  const perBook = db.betsTodayByBook();
+  assert.ok(perBook.chance >= 3 && perBook.synottip >= 3);
   db.db.prepare("DELETE FROM bets WHERE surebet_key = 'combo-test|h2h||chance:1|synottip:2'").run();
-  console.log('per-combo limit tests passed');
+  console.log('per-book limit tests passed');
 }

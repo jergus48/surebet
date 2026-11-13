@@ -670,10 +670,14 @@ function autoAllowed(settings, sb) {
   if (sb.staked > settings.autoMaxStakeTotal) return `stake ${sb.staked} > max ${settings.autoMaxStakeTotal}`;
   // overall daily limit only when set above 0
   if (Number(settings.autoDailyMaxBets) > 0 && db.autoBetsToday() >= settings.autoDailyMaxBets) return 'daily auto-bet limit reached';
-  // per bookmaker combination: at most autoDailyMaxPerCombo bets a day on the same books (e.g. chance+synottip)
-  const combo = [...new Set((sb.legs || []).map(l => l.book))].sort().join('+');
-  const perCombo = Number(settings.autoDailyMaxPerCombo ?? 3);
-  if (perCombo > 0 && combo && (db.betsTodayByCombo()[combo] || 0) >= perCombo) return `daily limit for ${combo} reached (${perCombo})`;
+  // per bookmaker: at most autoDailyMaxPerBook bets a day at one book, whatever it was paired with
+  // (chance+nike, chance+tipos, chance+tipsport -> Chance is done for the day; Niké still has 2)
+  const perBook = Number(settings.autoDailyMaxPerBook ?? 3);
+  if (perBook > 0) {
+    const today = db.betsTodayByBook();
+    const full = [...new Set((sb.legs || []).map(l => l.book))].filter(b => (today[b] || 0) >= perBook);
+    if (full.length) return `daily limit reached at ${full.join(', ')} (${perBook} bets)`;
+  }
   return null;
 }
 
