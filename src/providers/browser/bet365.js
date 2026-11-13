@@ -23,26 +23,18 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // "Weekend" coupons (F^2001), tennis tour cards open F^24 coupons. ~350 football
 // + ~55 tennis prematch fixtures in total.
 const C = (sport, g, j, f) => `#/AC/B${sport}/C1/D1002/G${g}/J${j}/Q1/F%5E${f}/`;
+// Six tabs, not sixteen: each Bet365 tab holds ~350 MB and the Mac ran out of memory with 16
+// (2026-11-13). Override with settings.bet365Routes.
 const SPORTS = {
   football: [
     '#/AS/B1/', // featured
     C(1, 40, 99, 2001), // Top Leagues
-    C(1, 40, 1, 2001), // United Kingdom
-    C(1, 40, 6, 2001), // Italy
-    C(1, 40, 8, 2001), // Spain
-    C(1, 40, 7, 2001), // Germany
-    C(1, 40, 15, 2001), // France
     C(1, 40, 17, 2001), // Europe
-    C(1, 40, 2, 2001), // Rep of Ireland
     C(1, 40, 13, 2001), // Rest of the World
-    C(1, 40, 18, 2001), // Australia
-    C(1, 40, 12, 2001), // The Americas
   ],
   tennis: [
     '#/AS/B13/', // featured
-    C(13, 83, 10, 24), // ATP
-    C(13, 83, 11, 24), // WTA
-    C(13, 83, 12, 24), // Challenger
+    C(13, 83, 12, 24), // Challenger (the most matches)
   ],
 };
 
@@ -112,7 +104,18 @@ async function openTab(settings, route) {
   return t;
 }
 
+// A tab that died (Chrome restarted or closed) throws here forever with "detached Frame":
+// forget it so the next read reopens the window and the tab.
 async function readRoute(settings, route) {
+  try {
+    return await readRouteOnce(settings, route);
+  } catch (e) {
+    tabs.delete(route);
+    throw e;
+  }
+}
+
+async function readRouteOnce(settings, route) {
   let t = tabs.get(route);
   if (!t || t.page.isClosed()) t = await openTab(settings, route);
   let rows = await t.page.evaluate(`(${extract.toString()})()`);
@@ -169,4 +172,81 @@ async function collect(settings, sportKeys) {
   return [...seen.values()];
 }
 
-module.exports = { SPORTS, collect, parseStart, parseWeekday };
+// ---- live (fast loop) ---------------------------------------------------------------
+// One In-Play tab per sport, opened once and kept live by Bet365 itself (like the pre-match tabs);
+// every live poll only re-reads the screen (bet365-live.js). Only the sports with the most live
+// surebets get a tab, to keep this window's memory in check. In-Play rows show no kick-off time:
+// football's is estimated from its clock, the others carry start null (paired by names, live only).
+const live = require('./bet365-live');
+const LIVE_ROUTES = { football: ['#/IP/B1', 3], tennis: ['#/IP/B13', 2], basketball: ['#/IP/B18', 2], tabletennis: ['#/IP/B92', 2] };
+
+// Bet365 stops sending odds to an In-Play tab after a while: the socket stays open (heartbeats only)
+// and the page keeps counting its clocks, but every price freezes. A live tab gets several updates
+// a second, so each In-Play tab's websocket frames are counted: a tab under LIVE_MIN_FRAMES in the
+// last LIVE_WINDOW_MS is stale, its prices are not used, and it is reloaded (at most every 90 s).
+const LIVE_WINDOW_MS = 30000, LIVE_MIN_FRAMES = 15, LIVE_RELOAD_MS = 90000;
+const feeds = new Map(); // route -> { page, frames: [ms], loadedAt }
+
+async function watchFeed(route, page) {
+  const f = feeds.get(route);
+  if (f && f.page === page) return f;
+  const c = await page.target().createCDPSession();
+  const nf = { page, frames: [], loadedAt: Date.now(), reloadedAt: 0 };
+  c.on('Network.webSocketFrameReceived', () => nf.frames.push(Date.now()));
+  await c.send('Network.enable', { maxTotalBufferSize: 0, maxResourceBufferSize: 0 });
+  feeds.set(route, nf);
+  return nf;
+}
+
+function feedRate(f, now = Date.now()) {
+  while (f.frames.length && now - f.frames[0] > LIVE_WINDOW_MS) f.frames.shift();
+  return f.frames.length;
+}
+
+async function collectLive(settings, sportKeys) {
+  if (Date.now() < blockedUntil) throw new Error('bet365 paused (empty pages)');
+  const routes = { ...LIVE_ROUTES, ...(settings.bet365LiveRoutes || {}) };
+  const events = [];
+  const now = Date.now();
+  const stale = [];
+  for (const key of sportKeys) {
+    if (!routes[key]) continue;
+    const [route, n] = routes[key];
+    let rows;
+    try {
+      let t = tabs.get(route);
+      if (!t || t.page.isClosed()) t = await openTab(settings, route);
+      const f = await watchFeed(route, t.page);
+      // Not watched long enough yet: no verdict, no prices.
+      if (now - f.loadedAt < LIVE_WINDOW_MS) continue;
+      if (feedRate(f, now) < LIVE_MIN_FRAMES) {
+        stale.push(key);
+        if (now - f.reloadedAt >= LIVE_RELOAD_MS) {
+          f.reloadedAt = now;
+          f.loadedAt = now;
+          f.frames = [];
+          t.page.reload({ waitUntil: 'domcontentloaded', timeout: 45000 }).catch(e => db.log('warn', `bet365 live ${key} reload: ${e.message}`));
+        }
+        continue;
+      }
+      rows = live.parseCells(await t.page.evaluate(`(${live.leafTexts.toString()})()`), n);
+    } catch (e) {
+      tabs.delete(route);
+      feeds.delete(route);
+      throw new Error(`bet365 live ${key}: ${e.message}`);
+    }
+    const link = ORIGIN + route;
+    for (const r of rows) {
+      const sels = n === 3 ? ['1', 'X', '2'] : ['1', '2'];
+      events.push({
+        book: 'bet365', sport: key, league: null, home: r.home, away: r.away,
+        start: key === 'football' ? live.footballStart(r.clock, now) : null, live: true, link,
+        odds: r.odds.map((price, i) => ({ book: 'bet365', market: 'h2h', point: null, sel: sels[i], price, link, updated: now, home: r.home, away: r.away })),
+      });
+    }
+  }
+  if (stale.length) db.log('debug', `bet365 live: odds feed stalled on ${stale.join(', ')} (prices not used, tab reloaded)`);
+  return events;
+}
+
+module.exports = { SPORTS, collect, collectLive, parseStart, parseWeekday, LIVE_ROUTES, feedRate };

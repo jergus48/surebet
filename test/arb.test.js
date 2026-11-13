@@ -88,3 +88,22 @@ console.log('arb tests passed');
   if (Math.abs(lo.staked - 10) > 1 || Math.abs(hi.staked - 20) > 1) throw new Error(`tier stakes wrong: ${lo.staked} / ${hi.staked}`);
   console.log('tier tests passed');
 }
+
+// small uneven surebets keep their profit: 4 EUR on 1.35 / 4.80 (+5.3 %)
+{
+  const { bestSplit, findSurebets } = require('../src/arb');
+  const half = bestSplit([1.35, 4.8], 4, 0.5);
+  assert.ok(half.worstProfit / half.staked < 0.015); // 0.50 steps: ~1.25 %, too little
+  const st = bestSplit([1.35, 4.8], 4, 0.1, 0.5);
+  assert.ok(st.worstProfit / st.staked > 0.04, JSON.stringify(st)); // 0.10 steps: > 4 %
+  assert.ok(st.staked <= 4 && st.stakes.every(x => x >= 0.5));
+  const ev = { id: 'e', sport: 'hockey', home: 'A', away: 'B', drawPossible: false, odds: [
+    { book: 'nike', market: 'h2h', sel: '1', price: 1.35 }, { book: 'doxxbet', market: 'h2h', sel: '2', price: 4.8 },
+    { book: 'tipos', market: 'h2h', sel: '1', price: 1.3 }, { book: 'tipos', market: 'h2h', sel: '2', price: 4.4 }] };
+  const found = findSurebets([ev], { minProfitPct: 2.2, bankroll: 4, step: 1 });
+  assert.strictEqual(found.length, 1);
+  assert.ok(found[0].staked <= 4 && found[0].worstProfit / found[0].staked > 0.04);
+  // big totals stay on the ideal split
+  assert.deepStrictEqual(bestSplit([2.1, 2.1], 100, 1).stakes, [50, 50]);
+  console.log('small-stake split tests passed');
+}

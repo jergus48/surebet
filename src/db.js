@@ -117,6 +117,11 @@ module.exports = {
   addBet: (key, mode, status, detail) => Number(q.addBet.run(key, Date.now(), mode, status, detail || '').lastInsertRowid),
   setBet: (id, status, detail) => q.setBet.run(status, detail || '', id),
   bets: (n = 200) => q.bets.all(n),
+  // Bet attempts on one match (surebet keys start with the event id): { n, last, placed }
+  eventBets: eventId => {
+    const rows = db.prepare("SELECT created, status FROM bets WHERE substr(surebet_key, 1, ?) = ?").all(eventId.length + 1, eventId + '|');
+    return { n: rows.length, last: Math.max(0, ...rows.map(r => r.created)), placed: rows.some(r => /^(placed|partial|unconfirmed|pending)$/.test(r.status)) };
+  },
   autoBetsToday: () => {
     const d = new Date(); d.setHours(0, 0, 0, 0);
     return q.betsSince.get(d.getTime()).n;

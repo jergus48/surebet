@@ -32,8 +32,12 @@ function reportNew(s, sb, siblings = []) {
   lastAlert.set(sb.key, sb.profitPct);
   // Suspect (a leg far above the other books) stays in history and the dashboard, but no alert and never a bet.
   if (sb.suspect && !s.alertSuspect) return;
-  notify.send(s, notify.format(sb, { siblings }), { html: true }).then(sent => sent && db.markNotified(sb.key)).catch(e => db.log('warn', `telegram: ${e.message}`));
-  if (s.betMode !== 'off') bettor.execute(s, sb).catch(e => db.log('error', `bettor: ${e.message}`));
+  // alertsOnlyBets: Telegram hears only from the bettor (slips ready, bets placed).
+  if (!s.alertsOnlyBets) notify.send(s, notify.format(sb, { siblings }), { html: true }).then(sent => sent && db.markNotified(sb.key)).catch(e => db.log('warn', `telegram: ${e.message}`));
+  if (s.betMode === 'off') return;
+  const why = bettor.betAllowed(s, sb);
+  if (why) return db.log('info', `no bet ${sb.home}-${sb.away}: ${why}`);
+  bettor.execute(s, sb).catch(e => db.log('error', `bettor: ${e.message}`));
 }
 
 // Same surebet still there, profit moved by >= 0.5 points: send an update.
@@ -43,7 +47,21 @@ function maybeUpdate(s, sb, siblings = []) {
   if (sb.suspect && !s.alertSuspect) return;
   db.log('info', `UPDATE ${sb.home}-${sb.away} ${prev}% -> ${sb.profitPct}%`);
   lastAlert.set(sb.key, sb.profitPct);
+  if (s.alertsOnlyBets) return;
   notify.send(s, notify.format(sb, { siblings, previous: prev }), { html: true }).catch(e => db.log('warn', `telegram: ${e.message}`));
+}
+
+// A surebet that is still there after its bet attempt failed (a page timed out, odds moved for a
+// moment) is tried again: at most RETRY_MAX attempts per match, RETRY_MS apart, never on a match
+// that already has a bet (placed, partial, unconfirmed or still running).
+const RETRY_MS = 5 * 60 * 1000, RETRY_MAX = 3;
+function maybeRetry(s, sb) {
+  if (s.betMode !== 'auto' || sb.live) return; // live surebets are re-reported by the live loop
+  if (bettor.betAllowed(s, sb)) return;
+  const ev = db.eventBets(sb.eventId || sb.key.split('|')[0]);
+  if (!ev.n || ev.placed || ev.n >= RETRY_MAX || Date.now() - ev.last < RETRY_MS) return;
+  db.log('info', `retry bet ${sb.home}-${sb.away} (+${sb.profitPct}%, attempt ${ev.n + 1})`);
+  bettor.execute(s, sb).catch(e => db.log('error', `bettor: ${e.message}`));
 }
 
 const siblingsOf = (found, sb) => found.filter(x => x.eventId === sb.eventId && x.key !== sb.key);
@@ -65,10 +83,11 @@ async function pollOnce() {
     });
     for (const sb of found) {
       if (db.upsertSurebet(sb)) reportNew(s, sb, siblingsOf(found, sb));
-      else maybeUpdate(s, sb, siblingsOf(found, sb));
+      else { maybeUpdate(s, sb, siblingsOf(found, sb)); maybeRetry(s, sb); }
     }
     analytics.record(events, { live: false, books, maxAgeMs: (s.maxOddsAgeSec || 0) * 1000, maxProfitPct: s.maxProfitPct });
     state.active = found;
+    state.events = events; // latest pre-match read (the bettor looks up covers here)
     state.lastEvents = events.length;
     state.lastError = null;
     state.lastRun = Date.now();
@@ -117,6 +136,7 @@ async function livePollOnce() {
     // A candidate missing from this poll loses its streak.
     for (const [k, v] of liveSeen) if (!present.has(k)) { v.count = 0; if (now - v.lastSeen > 600000) liveSeen.delete(k); }
     state.live = { running: state.live.running, lastRun: now, lastError: null, events: events.length, candidates: found.length, active: confirmed };
+    state.liveEvents = events;
     db.log('debug', `live ok: ${events.length} live matches, ${found.length} candidates, ${confirmed.length} confirmed, ${Date.now() - t0} ms | ${Object.entries(provider.getLiveStats ? provider.getLiveStats() : {}).map(([k, v]) => `${k} ${v.events}${v.ok ? '' : ' ERR'} ${v.ms}ms`).join(', ')}`);
   } catch (e) {
     state.live = { ...state.live, lastRun: Date.now(), lastError: e.message };

@@ -36,11 +36,22 @@ async function fetchFeed(page) {
   }, FEED);
 }
 
+// The scan asks once per sport within seconds; the feed holds every sport and answered the 3rd and
+// 4th quick repeat with HTTP 401. One read is reused for FEED_REUSE_MS.
+const FEED_REUSE_MS = 20000;
+let feedCache = null; // { at, json }
+async function cachedFeed(page) {
+  if (feedCache && Date.now() - feedCache.at < FEED_REUSE_MS) return feedCache.json;
+  const json = await fetchFeed(page);
+  if (!json.error) feedCache = { at: Date.now(), json };
+  return json;
+}
+
 const live = s => s && s.isActive !== false && s.status === 1 && Number(s.odds) > 1;
 const r2 = n => Math.round(Number(n) * 100) / 100;
 
 // Pure: feed JSON -> events for one of our sport keys.
-function parse(json, sportKey, now = Date.now()) {
+function parse(json, sportKey, now = Date.now(), { liveOnly = false } = {}) {
   const out = [];
   const sport = (json.sports || []).find(s => s.identifier === SPORTS[sportKey]);
   if (!sport) return out;
@@ -53,7 +64,8 @@ function parse(json, sportKey, now = Date.now()) {
         const away = String((teams[1] && teams[1].name) || parts[1] || '').trim();
         const start = Date.parse(ev.startTime);
         if (!home || !away || !Number.isFinite(start)) continue;
-        if (ev.isLive || start <= now) continue; // featured feed: pre-match only
+        // collect: pre-match only; collectLive: the featured matches that are live now
+        if (liveOnly ? !ev.isLive : (ev.isLive || start <= now)) continue;
         const odds = [];
         const add = (market, point, sel, price) => odds.push({ book: 'megawin', market, point, sel, price: r2(price), link: ORIGIN + '/', linkGeneric: true, updated: now });
         const types = ev.marketTypes || [];
@@ -81,7 +93,7 @@ function parse(json, sportKey, now = Date.now()) {
         out.push({
           book: 'megawin', sport: sportKey,
           league: [cat.name, t.name].filter(Boolean).join(' - ') || null,
-          home, away, start, live: false, link: ORIGIN + '/', odds,
+          home, away, start, live: !!liveOnly, link: ORIGIN + '/', odds,
         });
       }
     }
@@ -94,10 +106,21 @@ async function collect(settings, sportKeys) {
   const page = await megawinPage(cfg.port || 9332);
   const keys = sportKeys.filter(k => SPORTS[k]);
   if (!keys.length) return [];
-  const json = await fetchFeed(page);
+  const json = await cachedFeed(page);
   if (json.error) throw new Error(`megawin: ${json.error}`);
   return keys.flatMap(k => parse(json, k));
 }
 
-// Pre-match only (the featured feed is small and read every everySec): no collectLive.
-module.exports = { SPORTS, collect, parse, FEED };
+// Live (fast loop): the featured matches that are live right now, from the same feed. The live
+// section itself (megawin.mk/live) redirects to the homepage from outside North Macedonia and is
+// not read; the homepage shows the featured matches with clickable odds, live ones included.
+async function collectLive(settings, sportKeys) {
+  const page = await megawinPage((settings.bookmakers.megawin || {}).port || 9332);
+  const keys = sportKeys.filter(k => SPORTS[k]);
+  if (!keys.length) return [];
+  const json = await fetchFeed(page);
+  if (json.error) throw new Error(`megawin live: ${json.error}`);
+  return keys.flatMap(k => parse(json, k, Date.now(), { liveOnly: true }));
+}
+
+module.exports = { SPORTS, collect, collectLive, parse, FEED };

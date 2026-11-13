@@ -32,11 +32,7 @@ const SPORTS = {
 // 19 = "Zápas" 1/0/2, 20 = "Dvojtip" 10/12/02, 25 = "Celkový počet gólov" (Nad/Pod).
 // Without GameIds the API returns only each event's main market (1/0/2 or
 // "Víťaz zápasu" 1/2), which is what the 2-way sports use.
-const GAME_IDS = {
-  football: [19, 20, 25],
-  hockey: [19, 20],
-  handball: [19, 20],
-};
+const { marketsOf, GAME_IDS } = require('./platformMarkets'); // market ids shared with Tipos
 
 // ---- minimal protobuf reader -------------------------------------------------
 // Schemas: fieldNo -> [name, type, repeated?, subSchema]
@@ -189,8 +185,23 @@ function parse(json, sportKey) {
     const t = teams(ev);
     if (!t) continue; // outrights, specials
     const link = eventLink(ev);
-    const odds = [];
-    for (const gg of ev.GameGroups || []) for (const g of gg.Games || []) odds.push(...oddsOf(g, link, now));
+    // Every market the list carries (GameIds), mapped by the shared Tipos/Synottip mapper; the old
+    // reader (1X2, double chance, totals) stays as the fallback when the mapper finds no main market.
+    const games = [];
+    for (const gg of ev.GameGroups || []) for (const g of gg.Games || []) {
+      const rows = [];
+      for (const d of g.Details || []) {
+        if (d.Suspended || (d.State && d.State !== 2)) continue;
+        const row = (d.OddsList || []).filter(o => !o.State || o.State === 2).map(o => ({ name: String(o.Name || '').trim(), price: Number(o.Rate) })).filter(o => o.price > 1);
+        if (row.length) rows.push(row);
+      }
+      games.push({ name: g.Name, rows });
+    }
+    let odds = marketsOf(sportKey, t[0].trim(), t[1].trim(), games).map(o => ({ book: 'synottip', ...o, link, updated: now }));
+    if (!odds.some(o => o.market === 'h2h')) {
+      odds = [];
+      for (const gg of ev.GameGroups || []) for (const g of gg.Games || []) odds.push(...oddsOf(g, link, now));
+    }
     if (!odds.length) continue;
     out.push({
       book: 'synottip',
@@ -234,7 +245,10 @@ async function doRefresh(page, port) {
   };
   page.on('response', onResp);
   try {
-    const url = /sport\.synottip\.sk/.test(page.url()) ? page.url() : ORIGIN + '/';
+    // An error page (/Error/500) or a single match (that may have ended) never brings a token back:
+    // reload the sport homepage instead.
+    const u = page.url();
+    const url = /sport\.synottip\.sk/.test(u) && !/\/Error\/|live-zapas|\/zapas\//i.test(u) ? u : ORIGIN + '/';
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     const token = await Promise.race([got, new Promise(r => setTimeout(() => r(null), 30000))]);
     if (!token) throw new Error('synottip: page did not receive a session token (GetLiveInitData)');

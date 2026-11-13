@@ -180,7 +180,11 @@
         <div><label>Auto: max. total stake</label><input id="s-autoMaxStakeTotal" type="number"></div>
         <div><label>Auto: max. bets/day</label><input id="s-autoDailyMaxBets" type="number"></div>
         <div><label>Auto: pre-match only</label><select id="s-autoPrematchOnly"><option value="true">yes</option><option value="false">no</option></select></div>
+        <div><label>Auto: min. profit % live</label><input id="s-autoLiveMinProfitPct" type="number" step="0.1"></div>
+        <div><label>Auto: max total stake live</label><input id="s-autoLiveMaxStakeTotal" type="number" step="0.5"></div>
+        <div><label>Auto: bet suspect surebets</label><select id="s-autoBetSuspect"><option value="true">yes (slip prices re-checked)</option><option value="false">no</option></select></div>
         <div><label>Telegram alerts for suspect surebets (stale-looking leg)</label><select id="s-alertSuspect"><option value="false">no (history only)</option><option value="true">yes</option></select></div>
+        <div><label>Telegram: only bets (no plain surebet alerts)</label><select id="s-alertsOnlyBets"><option value="true">yes</option><option value="false">no, every surebet</option></select></div>
         <div><label>Max. odds drop on slip %</label><input id="s-maxOddsDropPct" type="number" step="0.1"></div>
         <div><label>Read balances every (s)</label><input id="s-balanceEverySec" type="number" min="60"></div>
         <div><label>Low balance warning below (€, 0 = off)</label><input id="s-lowBalanceAlert" type="number" min="0"></div>
@@ -439,11 +443,11 @@ async function bet(key, mode) {
 }
 
 const FIELDS = ['provider', 'oddsApiIoKey', 'apiHoursAhead', 'oddsApiKey', 'oddsApiRegions', 'oddsApiBookmakers', 'oddsApiMarkets', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct',
-  'bankrollPerBet', 'roundStakeTo', 'includeLive', 'telegramBotToken', 'telegramChatId', 'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'alertSuspect', 'maxOddsDropPct',
+  'bankrollPerBet', 'roundStakeTo', 'includeLive', 'telegramBotToken', 'telegramChatId', 'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'autoLiveMinProfitPct', 'autoLiveMaxStakeTotal', 'autoBetSuspect', 'alertSuspect', 'alertsOnlyBets', 'maxOddsDropPct',
   'balanceEverySec', 'lowBalanceAlert'];
-const NUM = new Set(['apiHoursAhead', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct', 'bankrollPerBet', 'roundStakeTo', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'maxOddsDropPct',
+const NUM = new Set(['apiHoursAhead', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct', 'bankrollPerBet', 'roundStakeTo', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoLiveMinProfitPct', 'autoLiveMaxStakeTotal', 'maxOddsDropPct',
   'balanceEverySec', 'lowBalanceAlert']);
-const BOOL = new Set(['includeLive', 'autoPrematchOnly', 'alertSuspect']);
+const BOOL = new Set(['includeLive', 'autoPrematchOnly', 'autoBetSuspect', 'alertSuspect', 'alertsOnlyBets']);
 
 async function loadSettings() {
   settings = await get('/api/settings');

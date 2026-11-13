@@ -85,10 +85,31 @@ async function bookPage(port, domainRe) {
     await new Promise(r => setTimeout(r, 300));
     pages = await browser.pages();
   }
-  return pages.find(p => domainRe.test(p.url()))
+  // The reading tab is never the betting tab, and an error page only if nothing else is left.
+  const onSite = pages.filter(p => domainRe.test(p.url()) && ![...betTabs.values()].includes(p));
+  return onSite.find(p => !/\/Error\//i.test(p.url())) || onSite[0]
     || pages.find(p => /^(about:blank|chrome:\/\/newtab)/.test(p.url()))
     || browser.newPage();
 }
+
+// A tab whose renderer froze answers no CDP call (every evaluate times out after 60 s, and
+// puppeteer cannot even attach to it). Through the window's plain HTTP debug endpoints, which
+// still work, open a fresh tab on the same address and close the frozen one. Cookies live in
+// the profile, so the login stays. The betting tab is never replaced. At most once per 10 min.
+const lastReplace = new Map();
+async function replaceFrozenTab(port, domainRe) {
+  if (Date.now() - (lastReplace.get(port) || 0) < 10 * 60 * 1000) return false;
+  lastReplace.set(port, Date.now());
+  const base = `http://127.0.0.1:${port}/json`;
+  const list = await (await fetch(`${base}/list`, { signal: AbortSignal.timeout(5000) })).json();
+  const betIds = new Set([...betTabs.entries()].filter(([p, pg]) => p === port && !pg.isClosed()).map(([, pg]) => pg.target()._targetId));
+  const old = list.find(t => t.type === 'page' && domainRe.test(t.url) && !betIds.has(t.id));
+  if (!old) return false;
+  await fetch(`${base}/new?${old.url}`, { method: 'PUT', signal: AbortSignal.timeout(5000) });
+  await fetch(`${base}/close/${old.id}`, { signal: AbortSignal.timeout(5000) });
+  return old.url;
+}
+const isTimeout = e => /timed out/i.test(e && e.message || '');
 
 // Dedicated betting tab per window, separate from the tab the scanner reads,
 // so placing a bet never fights with a scan reload.
@@ -102,4 +123,6 @@ async function betPage(port) {
   return page;
 }
 
-module.exports = { findChromeExe, launch, launchCommand, isUp, connect, bookPage, betPage, profileDir };
+const isBetPage = page => [...betTabs.values()].includes(page);
+
+module.exports = { findChromeExe, launch, launchCommand, isUp, connect, bookPage, betPage, isBetPage, profileDir, replaceFrozenTab, isTimeout };

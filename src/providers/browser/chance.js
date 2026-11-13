@@ -86,4 +86,9 @@ async function collectLive(settings, sportKeys) {
   return (await collect(settings, sportKeys)).filter(e => e.live);
 }
 
-module.exports = { SPORTS, collect, collectLive, parse };
+// Extra markets (football) from the match detail, fetched by a background queue (tipsportDetail.js).
+// No detail requests to Chance (HTTP 429): Tipsport's details for the same match id, re-labelled.
+require('./tipsport'); // its queue must exist
+const details = require('./tipsportDetail').mirror('tipsport', 'chance');
+
+module.exports = { SPORTS, collect, collectLive, parse, details };

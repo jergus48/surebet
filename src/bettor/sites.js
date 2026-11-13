@@ -41,13 +41,18 @@ const DEFAULTS = {
     search: null,
     slipError: '.bs-GeneralErrorMessage_Contents',
     balanceRequired: true,
+    // In-Play pages (#/IP/B..) show prices in ovm- cells. Handicap and total cells use the same
+    // class as the match winner but show their line ("+14.5", "Ü 187.5") next to the price:
+    // a price whose cell holds a non-empty oddsLine is never the one clicked.
+    oddsLine: '.ovm-ParticipantHandicap_Handicap',
     selectors: {
       loggedIn: '.bs-Balance_Value',
       balance: '.bs-Balance_Value',
-      oddsButton: 'span[data-content]',
+      oddsButton: 'span[data-content], .ovm-ParticipantOddsOnly_Odds, .ovm-ParticipantHandicap_Odds', // pre-match, In-Play
       stakeInput: '.bsf-StakeBox_StakeValue-input',
       slipOdds: '.bss-NormalBetItem_OddsContainer .bs-OddsLabel',
       placeButton: '.bsf-PlaceBetButton',
+      acceptChanges: '.bsf-AcceptButton', // shown when the odds moved: the leg stops, it is never clicked
       placedConfirm: null,
     },
   },
@@ -64,6 +69,15 @@ const TIPOS_SLIP = {
   placeButton: '[data-test-role="ticket-submit"]',
   placedConfirm: null,
 };
+// Match pages of both: market tabs, one block per market (first line = its name), labelled buttons
+// ("Nad (2.5) 1,76"). marketUI lets the bettor click other markets by name and label (bettor
+// MARKET_UI); betMarkets = the markets whose clicking was tested on the site (dry run, never placed).
+const TIPOS_MARKETS = {
+  marketUI: { tabs: '[data-test-role="game-group-tabs__item"]', game: '[data-test-role="event-game"]', button: '[data-test-role="rate"]' },
+  // Tested 2026-11-13 on both sites (filled, never placed): totals, handicap, BTTS, draw no bet; 1st-half
+  // totals use the same block layout and labels.
+  betMarkets: ['totals', 'spreads', 'btts', 'dnb', '1h_totals'],
+};
 const TIPOS_BAL = 'span.user-information__total-balance';
 const SYNOT_BAL = 'span[data-test-role~="player-account__balance--money"]';
 const NIKE_BAL = '[data-atid="infobox-deposit-value"]';
@@ -75,7 +89,7 @@ Object.assign(DEFAULTS, {
     home: 'https://www.nike.sk/', domain: /nike\.sk/, search: null,
     selectors: {
       ...EMPTY, balance: NIKE_BAL, loggedIn: NIKE_BAL,
-      oddsButton: 'span[data-atid="n1-bet-odd"]',
+      oddsButton: 'span[data-atid="n1-bet-odd"], [data-atid="tl-bet-odd"]', // pre-match, live
       stakeInput: '[data-atid="te-simple-stake-input"]',
       slipOdds: '[data-atid="te-pick-odds"]',
       placeButton: '[data-atid="te-submit-button"]', // "Staviť x €"
@@ -83,18 +97,22 @@ Object.assign(DEFAULTS, {
   },
   // Calibrated 2026-11-10 on a logged-in account: filled a real slip without placing. Place is
   // "STAVIŤ TIKET" (not "Uložiť tiket"); it may open a confirmation step, check the first real bet.
+  // After a bet DOXXbet opens the placed ticket in a window (aside.modal--ticket, with Cancel and
+  // Cash out buttons): the bot only closes it with its X. Placed tickets (that window and the
+  // "my tickets" list) reuse the slip's odd--ticket class, so both are left out of slipOdds.
   doxxbet: {
     home: 'https://www.doxxbet.sk/sk', domain: /doxxbet\.sk/, search: null,
+    closePopups: ['aside.modal--ticket.uk-open button.uk-modal-close'],
     selectors: {
       ...EMPTY, balance: '#client-balance', loggedIn: '#client-balance',
       oddsButton: 'span.rate',
       stakeInput: 'input.input--stake',
-      slipOdds: 'span.odd--ticket',
+      slipOdds: 'span.odd--ticket:not(my-account-ticket-list-item *):not(.modal--ticket *):not(.clickable-row-ticket *)', // not placed tickets (list, window, side table)
       placeButton: 'button[ng-click="tc.preSubmitTicket()"]',
     },
   },
-  tipos: { home: 'https://tipkurz.etipos.sk/', domain: /etipos\.sk/, search: null, selectors: { ...TIPOS_SLIP, balance: TIPOS_BAL, loggedIn: TIPOS_BAL } },
-  synottip: { home: 'https://www.synottip.sk/', domain: /synottip\.sk/, search: null, selectors: { ...TIPOS_SLIP, balance: SYNOT_BAL, loggedIn: SYNOT_BAL } },
+  tipos: { home: 'https://tipkurz.etipos.sk/', domain: /etipos\.sk/, search: null, ...TIPOS_MARKETS, selectors: { ...TIPOS_SLIP, balance: TIPOS_BAL, loggedIn: TIPOS_BAL } },
+  synottip: { home: 'https://www.synottip.sk/', domain: /synottip\.sk/, search: null, ...TIPOS_MARKETS, selectors: { ...TIPOS_SLIP, balance: SYNOT_BAL, loggedIn: SYNOT_BAL } },
   // Same platform as Tipsport, same selectors (filled a real slip 2026-11-10). Its slip has a
   // "€ / G" switch (G = Goldeny bonus coins) that opens on G: euroToggle flips it to € first,
   // and the bot still refuses any slip whose Place button is not in €.
@@ -111,6 +129,8 @@ Object.assign(DEFAULTS, {
   // page (slipOpen expands it). Place is "УПЛАТИ x МКД".
   megawin: {
     home: 'https://megawin.mk/', domain: /megawin\.mk/, search: null, currency: 'MKD', stakeKeypad: true,
+    // Featured matches sit in a swiper carousel: ~3 are on screen, the rest are scrolled into view.
+    scrollCarousel: true,
     // The cookie notice returns on every page load and covers the slip: the bot clicks its X
     // (closes it without accepting).
     closePopups: ['[data-popup-id="cookie_box"] [data-element-type="UIElementPopupClose"]'],

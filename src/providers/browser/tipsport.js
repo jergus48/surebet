@@ -85,4 +85,7 @@ async function collectLive(settings, sportKeys) {
   return (await collect(settings, sportKeys)).filter(e => e.live);
 }
 
-module.exports = { SPORTS, collect, collectLive, parse };
+// Extra markets (football) from the match detail, fetched by a background queue (tipsportDetail.js).
+const detailQueue = require('./tipsportDetail').queueFor('tipsport', tipsportPage);
+
+module.exports = { SPORTS, collect, collectLive, parse, details: detailQueue.details };

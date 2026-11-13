@@ -137,4 +137,85 @@ async function collectLive(settings, sportKeys) {
   return (await collect(settings, sportKeys)).filter(e => e.live);
 }
 
-module.exports = { collect, collectLive, parse, SPORTS, localToEpoch };
+// ---- extra markets (match detail) -------------------------------------------------------
+// The list carries only the main market. Every other market comes per match:
+//   POST /offer/GetOfferEventDetail {"eventId": <id>}
+//   -> { EventChanceTypes: {..: {EventChanceTypeID, ChanceTypeID, ChanceTypeName, EventChanceTypeStatus}},
+//        Odds: {..: {EventChanceTypeID, TipType, OddsRate, Status}} }
+// The line is in the market name ("Počet gólov 2.5", "Handicap góly +0.5/-0.5" = HOME line first).
+// Tip "1" = over / home / yes, "2" = under / away / no (checked 2026-11-13 against Tipos' prices).
+// Ids ported from the Python scanner: uf:11 draw no bet, uf:29 both teams score, uf:60 1st half 1X2,
+// uf:16 handicap, uf:18 total goals, uf:68 1st half goals, uf:19 / uf:20 home / away team goals.
+// Hockey: "Výsledok" and the totals are regular time, as Tipos' (our hockey h2h / totals).
+// Called only for matches another book with these markets also lists (providers/browser/index.js),
+// one request at a time, ~1 per second (the site answered 403 at ~1.9/s in the Python scanner).
+const half = x => Number.isFinite(x) && Math.abs(Math.abs(x) % 1 - 0.5) < 1e-9;
+const lastNum = n => { const m = /([+-]?\d+(?:[.,]\d+)?)\s*$/.exec(n || ''); return m ? Number(m[1].replace(',', '.')) : NaN; };
+const firstHcp = n => { const m = /([+-]?\d+(?:[.,]\d+)?)\s*\/\s*[+-]?\d/.exec(n || ''); return m ? Number(m[1].replace(',', '.')) : NaN; };
+
+// Pure: detail JSON -> extra odds (our markets). link/now are copied onto every odd.
+function parseDetail(json, link, now = Date.now()) {
+  const ects = Object.values((json && json.EventChanceTypes) || {});
+  const odds = Object.values((json && json.Odds) || {});
+  const out = [];
+  const seen = new Set();
+  const ids = {}; // price -> OddsID, per event chance type (the button on the match page has class Odd_<OddsID>)
+  const tips = ect => {
+    const o = {};
+    for (const x of odds) if (x.EventChanceTypeID === ect.EventChanceTypeID && x.Status === 'active' && Number(x.OddsRate) > 1) {
+      o[String(x.TipType)] = Math.round(Number(x.OddsRate) * 100) / 100;
+      ids[`${ect.EventChanceTypeID}|${x.TipType}`] = x.OddsID;
+    }
+    return o;
+  };
+  let cur = null; // the event chance type being mapped (for the pick of each price)
+  const tipOf = { '1': '1', X: 'X', '2': '2', '1X': '1X', X2: 'X2', '12': '12', O: '1', U: '2', H: '1', A: '2', Y: '1', N: '2' };
+  const put = (market, point, prices) => {
+    const k = `${market}|${point ?? ''}`;
+    if (seen.has(k) || Object.values(prices).some(p => !(p > 1))) return;
+    seen.add(k);
+    for (const [sel, price] of Object.entries(prices)) {
+      const id = cur && ids[`${cur.EventChanceTypeID}|${tipOf[sel]}`];
+      out.push({ book: 'doxxbet', market, point: point ?? null, sel, price, link, updated: now, ...(id ? { pick: { css: `.Odd_${id}` } } : {}) });
+    }
+  };
+  for (const e of ects) {
+    if (e.EventChanceTypeStatus && e.EventChanceTypeStatus !== 'active') continue;
+    cur = e;
+    const t = tips(e);
+    const two = (a, b, sa, sb) => (t['1'] && t['2'] ? { [sa]: t['1'], [sb]: t['2'] } : null);
+    switch (e.ChanceTypeID) {
+      case 'uf:11': { const p = two(0, 0, '1', '2'); if (p) put('dnb', null, p); break; }
+      case 'uf:29': { const p = two(0, 0, 'Y', 'N'); if (p) put('btts', null, p); break; }
+      case 'uf:60': if (t['1'] && t.X && t['2']) put('1h_h2h', null, { '1': t['1'], X: t.X, '2': t['2'], ...(t['1X'] && t.X2 && t['12'] ? { '1X': t['1X'], X2: t.X2, '12': t['12'] } : {}) }); break;
+      case 'uf:16': { const l = firstHcp(e.ChanceTypeName); const p = two(0, 0, 'H', 'A'); if (p && half(l)) put('spreads', l, p); break; }
+      case 'uf:18': case 'uf:68': case 'uf:19': case 'uf:20': {
+        const l = lastNum(e.ChanceTypeName);
+        const p = two(0, 0, 'O', 'U');
+        const market = { 'uf:18': 'totals', 'uf:68': '1h_totals', 'uf:19': 'home_totals', 'uf:20': 'away_totals' }[e.ChanceTypeID];
+        if (p && half(l)) put(market, l, p);
+        break;
+      }
+      default:
+    }
+  }
+  return out;
+}
+
+// Details come from the shared background queue (detailQueue.js), ~1 request per second.
+const queue = require('./detailQueue').createDetailQueue({
+  name: 'doxxbet',
+  keyOf: link => Number((/[?&]event=(\d+)/.exec(link) || [])[1]) || null,
+  fetchOne: async (settings, id) => {
+    const page = await doxxbetPage(settings.bookmakers.doxxbet.port);
+    return page.evaluate(async (id) => {
+      const r = await fetch('/offer/GetOfferEventDetail', { method: 'POST', headers: { 'content-type': 'application/json;charset=UTF-8', accept: 'application/json, text/plain, */*' }, body: JSON.stringify({ eventId: id }) });
+      if (!r.ok) return { error: `HTTP ${r.status}`, status: r.status };
+      try { return await r.json(); } catch { return { error: 'non-JSON response' }; }
+    }, id);
+  },
+  parse: (j, link) => parseDetail(j, link),
+});
+const details = queue.details;
+
+module.exports = { collect, collectLive, parse, parseDetail, details, SPORTS, localToEpoch };

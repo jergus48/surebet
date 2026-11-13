@@ -66,7 +66,7 @@ function csv(rows) {
 const SETTABLE = new Set(['provider', 'oddsApiKey', 'oddsApiRegions', 'oddsApiBookmakers', 'oddsApiMarkets', 'sports', 'pollSeconds', 'minCreditsLeft',
   'minProfitPct', 'maxProfitPct', 'maxOddsAgeSec', 'liveSeconds', 'liveMaxAgeSec', 'liveConfirmPolls', 'liveMinProfitPct', 'liveMaxProfitPct', 'includeLive', 'bankrollPerBet', 'stakeTiers', 'roundStakeTo', 'telegramBotToken', 'telegramChatId',
   'scanSports', 'tipsportLimit', 'bet365WaitSec', 'bet365Routes', 'oddsApiIoKey', 'apiHoursAhead', 'apiMaxEventsPerSport',
-  'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'alertSuspect', 'maxOddsDropPct', 'bookmakers', 'dashboardPassword',
+  'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'autoLiveMinProfitPct', 'autoLiveMaxStakeTotal', 'autoBetSuspect', 'alertSuspect', 'alertsOnlyBets', 'maxOddsDropPct', 'bookmakers', 'dashboardPassword',
   'balanceEverySec', 'lowBalanceAlert']);
 
 async function api(req, res, url) {
@@ -234,5 +234,5 @@ const server = http.createServer(async (req, res) => {
 const s = config.load();
 server.listen(s.port, s.host, () => {
   db.log('info', `dashboard on http://${s.host === '0.0.0.0' ? 'localhost' : s.host}:${s.port} (provider: ${s.provider}, betMode: ${s.betMode})`);
-  if (process.env.AUTOSTART !== '0') { scanner.start(); balances.start(); }
+  if (process.env.AUTOSTART !== '0') { scanner.start(); balances.start(); require('./memwatch').start(); }
 });

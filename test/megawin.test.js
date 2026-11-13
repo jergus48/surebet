@@ -29,7 +29,7 @@ const feed = {
               teams: [{ name: 'Tavernes' }, { name: 'Valencia' }],
               marketTypes: [{ id: 23, markets: [{ status: 1, selections: [sel('1', 50), sel('X', 50), sel('2', 1.01, false)] }] }],
             },
-            { // live: skipped
+            { // live: only in the live read
               name: 'A vs B', startTime: '2026-11-10T11:00:00Z', isLive: true,
               teams: [{ name: 'A' }, { name: 'B' }],
               marketTypes: [{ id: 23, markets: [{ status: 1, selections: [sel('1', 2), sel('X', 3), sel('2', 4)] }] }],
@@ -74,4 +74,7 @@ assert.strictEqual(tn.length, 1);
 assert.deepStrictEqual(tn[0].odds.map(o => `${o.sel}:${o.price}`), ['1:1.57', '2:2.28']);
 
 assert.deepStrictEqual(parse(feed, 'hockey', now), [], 'sport not in the feed');
+// live reader: only the featured matches that are live
+const lv = parse(feed, 'football', now, { liveOnly: true });
+assert.deepStrictEqual(lv.map(e => [e.home, e.live, e.odds.map(o => o.price).join('/')]), [['A', true, '2/3/4']]);
 console.log('megawin tests passed');

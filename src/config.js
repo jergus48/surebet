@@ -60,7 +60,11 @@ const DEFAULTS = {
   autoMaxStakeTotal: 50,
   autoDailyMaxBets: 10,
   alertSuspect: false, // Telegram alerts for surebets with a stale-looking leg (never auto-bet either way)
+  alertsOnlyBets: true, // Telegram: only bets (slips ready to place, placed), no plain surebet alerts
   autoPrematchOnly: true,
+  autoLiveMaxStakeTotal: 2, // live auto bets: total stake per surebet, 0.5 steps (small while live is new)
+  autoBetSuspect: true, // bet suspect surebets too (the slip prices are re-checked before Place)
+  autoLiveMinProfitPct: 4, // live surebets need at least this (odds move within seconds)
   maxOddsDropPct: 0.0, // abort a leg if slip odds are lower than scanned odds by more than this
   balanceEverySec: 300, // read each logged-in book's balance this often (needs the balance selector)
   lowBalanceAlert: 15, // Telegram warning when a book's balance falls below this; 0 = off

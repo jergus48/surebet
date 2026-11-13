@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { DATA_DIR } = require('../../config');
+const { preRaw, canon } = require('./names');
 
 const MAX_DT = 20 * 60e3;
 const STOP = new Set(['fc', 'sc', 'sk', 'sv', 'ac', 'fk', 'cf', 'cd', 'afc', 'bk', 'hc', 'hk', 'tsg', 'vfb', 'vfl', 'rb', 'as', 'us', 'ss', 'ud',
@@ -35,8 +36,9 @@ const MARKERS = [
 const MARKER_WORD = /^(u\d{2}|ii|res|rez|reserves|rezervy|reserve|women|zeny|ladies)$/;
 
 function norm(name) {
-  return String(name).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/ß/g, 'ss')
-    .replace(/\((w|z|zeny|women)\)/g, ' w ').replace(/[^a-z0-9]+/g, ' ').trim();
+  // Country names in Slovak/Czech/German, Niké age teams, women / reserve spellings -> one form (names.js).
+  return canon(String(preRaw(name)).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/ß/g, 'ss')
+    .replace(/\((w|z|zeny|women)\)/g, ' w ').replace(/[^a-z0-9]+/g, ' ').trim());
 }
 function markers(name) {
   const n = ` ${norm(name)} `;
@@ -82,7 +84,9 @@ function mergeBooks(lists, log = () => { }) {
   const groups = [];
   for (const list of lists) {
     for (const ev of list) {
-      const win = groups.filter(g => g.sport === ev.sport && Math.abs(g.start - ev.start) <= MAX_DT && !g.books.has(ev.book));
+      // A live event without a kick-off time (Bet365 In-Play) pairs with live groups by names only.
+      const near = g => (g.start == null || ev.start == null ? g.live && ev.live : Math.abs(g.start - ev.start) <= MAX_DT);
+      const win = groups.filter(g => g.sport === ev.sport && near(g) && !g.books.has(ev.book));
       let best = null, bestScore = 0;
       for (const g of win) {
         let sh = 0, sa = 0;
@@ -92,8 +96,9 @@ function mergeBooks(lists, log = () => { }) {
       if (best) {
         best.members.push(ev);
         best.books.add(ev.book);
+        if (best.start == null && ev.start != null) best.start = ev.start;
       } else {
-        groups.push({ sport: ev.sport, start: ev.start, members: [ev], books: new Set([ev.book]) });
+        groups.push({ sport: ev.sport, start: ev.start, live: !!ev.live, members: [ev], books: new Set([ev.book]) });
       }
     }
   }
@@ -102,7 +107,7 @@ function mergeBooks(lists, log = () => { }) {
     return {
       id: `${a.sport}:${a.home}:${a.away}:${a.start}`,
       sport: a.sport, league: g.members.find(m => m.league)?.league || null,
-      home: a.home, away: a.away, start: a.start,
+      home: a.home, away: a.away, start: g.start,
       live: g.members.some(m => m.live),
       books: [...g.books],
       names: Object.fromEntries(g.members.map(m => [m.book, `${m.home} - ${m.away}${m.league ? ` (${m.league})` : ''}`])),

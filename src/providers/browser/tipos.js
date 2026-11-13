@@ -25,6 +25,7 @@
 // Sport ids from GetWebStandardCategories (same protobuf tree), 2026-11.
 const chrome = require('../../bettor/chrome');
 const DRAW = require('./sports');
+const { marketsOf, GAME_IDS } = require('./platformMarkets');
 
 const ORIGIN = 'https://tipkurz.etipos.sk';
 const SPORTS = {
@@ -113,16 +114,27 @@ function parse(json, sportKey) {
                 for (const gm of all(pb(grp.v), 3)) {
                   const g = pb(gm.v);
                   const state = num(g, 11);
-                  if (state != null && state !== 2) continue; // 2 = open (only value seen)
+                  if (state != null && state !== 1 && state !== 2) continue; // 2 = open (main market), 1 = the extra markets (also bettable)
                   const odds = [];
-                  for (const d of all(g, 6)) for (const o of all(pb(d.v), 4)) {
-                    const om = pb(o.v);
-                    odds.push({ name: str(om, 2), price: num(om, 3) });
+                  const rows = []; // one row per detail: an over/under line keeps its own pair
+                  for (const d of all(g, 6)) {
+                    const row = [];
+                    for (const o of all(pb(d.v), 4)) {
+                      const om = pb(o.v);
+                      const x = { name: str(om, 2), price: num(om, 3) };
+                      odds.push(x);
+                      if (Number.isFinite(x.price) && x.price > 1) row.push(x);
+                    }
+                    if (row.length) rows.push(row);
                   }
-                  games.push({ name: str(g, 2), odds });
+                  games.push({ name: str(g, 2), odds, rows });
                 }
               }
-              const odds = mainOdds(games, sportKey, link);
+              // All markets the list carries (GameIds), mapped like Synottip; the old main-market pick
+              // stays as the fallback for sports the mapper does not know.
+              const now = Date.now();
+              let odds = marketsOf(sportKey, teams.home, teams.away, games).map(o => ({ book: 'tipos', ...o, link, updated: now }));
+              if (!odds.some(o => o.market === 'h2h')) odds = [...mainOdds(games, sportKey, link), ...odds];
               if (!odds.length) continue;
               out.push({ book: 'tipos', sport: sportKey, league, home: teams.home, away: teams.away, start, live: false, link, odds, tiposId: id });
             }
@@ -137,7 +149,7 @@ function parse(json, sportKey) {
 // Live: GetLIPEvtsDsk JSON -> events for the requested sport keys.
 // Odds/Details/Games State 2 = open; 3 = locked (Rate 0).
 // Same platform/format is used by Synottip: pass book + link builder.
-function parseLive(json, sportKeys, book = 'tipos', linkFor = id => `${ORIGIN}/zapas/${id}`) {
+function parseLive(json, sportKeys, book = 'tipos', linkFor = id => `${ORIGIN}/live-zapas/${id}`) { // live match page (/zapas/ shows no live odds)
   if (!json || json.Result !== 1 || !Array.isArray(json.ReturnValue)) return [];
   const want = new Set(sportKeys);
   const out = [];
@@ -223,7 +235,7 @@ async function collect(settings, sportKeys) {
   const events = [];
   for (const key of keys) {
     const j = await call(page, port, '/WebServices/Api/SportsBettingService.svc/GetWebStandardEvents',
-      { LanguageID: 17, CategoryID: String(SPORTS[key]), Top: top, IncludeLiveCategories: true })
+      { LanguageID: 17, CategoryID: String(SPORTS[key]), Top: top, IncludeLiveCategories: true, ...(GAME_IDS[key] ? { GameIds: GAME_IDS[key] } : {}) })
       .catch(e => { throw new Error(`tipos ${key}: ${e.message}`); });
     events.push(...parse(j, key));
     await sleep(400);

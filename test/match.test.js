@@ -5,7 +5,16 @@ assert.strictEqual(sim('B Shelton', 'Shelton B.'), 1);
 assert.strictEqual(sim('FC Salzburg', 'Salzburg'), 1);
 assert.strictEqual(sim("Borussia M'gladbach", 'Mönchengladbach'), 0);
 assert.strictEqual(sim('Arménsko', 'Armenien'), 1);
-assert.strictEqual(sim('Turecko', 'Türkei'), 0);
+assert.strictEqual(sim('Turecko', 'Türkei'), 1); // both Turkey (names.js)
+// ported from the Python scanner: countries, Niké age teams, women / reserves spellings
+assert.strictEqual(sim('Moldavsko', 'Moldova'), 1);
+assert.strictEqual(sim('Island 21', 'Iceland U21'), 1);
+assert.strictEqual(sim('Island 21', 'Iceland'), 0);      // U21 is not the senior team
+assert.strictEqual(sim('Hannover 96', 'Hannover'), 1);   // a club number is not an age
+assert.strictEqual(sim('Everton ž.', 'Everton (W)'), 1);
+assert.strictEqual(sim('Everton ž.', 'Everton'), 0);
+assert.strictEqual(sim('Boca Juniors rezervný tím', 'Boca Juniors Reserves'), 1);
+assert.strictEqual(sim('Severné Macedónsko', 'North Macedonia'), 1);
 // Regressions from the live scan: generic words and age markers are not evidence
 assert.strictEqual(sim('Al Jazeera Amman', 'Al Talaba'), 0);
 assert.strictEqual(sim('Al Ramtha', 'Ghaz Al-Shamal SC'), 0);
@@ -36,7 +45,7 @@ const ts = [
   { book: 'tipsport', sport: 'tennis', home: 'Shelton B.', away: 'Paul T.', start: t0, odds: o('tipsport', 1.9) },
 ];
 const b3 = [
-  // Armenia: only home matches -> must NOT pair
+  // Armenia - Cyprus in German: pairs now that names.js knows the German country names
   { book: 'bet365', sport: 'football', home: 'Armenien', away: 'Zypern', start: t0 + 5 * 60e3, odds: o('bet365', 2.3) },
   { book: 'bet365', sport: 'football', home: 'Türkei', away: 'Belgien', start: t0, odds: o('bet365', 3.5) },
   { book: 'bet365', sport: 'tennis', home: 'B Shelton', away: 'T Paul', start: t0, odds: o('bet365', 1.97) },
@@ -52,7 +61,8 @@ const nike = [
 ];
 const m = mergeBooks([ts, b3, nike]);
 const by = Object.fromEntries(m.map(e => [`${e.home}-${e.away}`, e]));
-assert.deepStrictEqual(Object.keys(by).sort(), ['Shelton B.-Paul T.', 'Türkei-Belgien']);
+assert.deepStrictEqual(Object.keys(by).sort(), ['Arménsko-Cyprus', 'Shelton B.-Paul T.', 'Turecko-Belgicko']);
 assert.deepStrictEqual(by['Shelton B.-Paul T.'].books.sort(), ['bet365', 'nike', 'tipsport']);
-assert.deepStrictEqual(by['Türkei-Belgien'].books.sort(), ['bet365', 'nike']);
+assert.deepStrictEqual(by['Turecko-Belgicko'].books.sort(), ['bet365', 'nike', 'tipsport']);
+assert.deepStrictEqual(by['Arménsko-Cyprus'].books.sort(), ['bet365', 'tipsport']); // the tennis "Armenien" stays out
 console.log('match tests passed');

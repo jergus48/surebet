@@ -16,6 +16,9 @@ const { marketLabel } = require('../arb');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const inFlight = new Set();
+const activeEvents = new Set(); // matches with a bet attempt running
+const betEvents = new Set();    // matches where Place was clicked (placed, partial or unconfirmed)
+const busyBooks = new Set();    // books whose betting tab is in use
 
 function priceTexts(p) {
   const a = p.toFixed(2), b = String(p);
@@ -107,6 +110,14 @@ async function typeStake(page, sel, leg, { keypad = false } = {}) {
   await page.keyboard.press('KeyA');
   await page.keyboard.up(mod);
   await page.keyboard.press('Backspace');
+  // Some boxes ignore select-all (Tipos' live slip keeps its "1,00"): select the input's own text,
+  // then delete from the end until it is empty.
+  const left = () => box.evaluate(el => String(el.value ?? el.innerText ?? '').trim());
+  if (await left()) {
+    await box.evaluate(el => { if (typeof el.select === 'function') el.select(); });
+    await page.keyboard.press('Backspace');
+    for (let i = 0; i < 12 && (await left()); i++) { await page.keyboard.press('End'); await page.keyboard.press('Backspace'); }
+  }
   await page.keyboard.type(stakeText(amount, current), { delay: 40 });
   const shown = await box.evaluate(el => el.value ?? el.innerText);
   if (!stakeMatches(shown, amount)) throw new Error(`${leg.book}: stake box shows "${shown}", not ${amount}: not continuing`);
@@ -118,10 +129,26 @@ async function verifySlip(page, S, leg) {
   const box = await visible(page, S.stakeInput);
   const shown = box ? await box.evaluate(el => el.value ?? el.innerText) : null;
   if (!stakeMatches(shown, amountOf(leg))) throw new Error(`${leg.book}: stake box now shows "${shown}", not ${amountOf(leg)}: not continuing`);
+  // The site asks to accept changed odds: never accept, the surebet math no longer holds.
+  if (S.acceptChanges && (await visible(page, S.acceptChanges))) throw new Error(`${leg.book}: the site asks to accept changed odds: not continuing`);
   const btn = await visible(page, S.placeButton);
   const label = btn ? await btn.evaluate(el => el.innerText).catch(() => '') : '';
+  if (ACCEPT_RE.test(label)) throw new Error(`${leg.book}: Place button now says "${String(label).trim()}" (accept changes): not continuing`);
   if (!btn || !placeLabelIn(label, leg.currency)) throw new Error(`${leg.book}: Place button shows "${String(label).trim()}", not a stake in ${unitOf(leg)}: not continuing`);
+  // The slip refuses this pick as a single bet (Niké lower leagues: "Zápasy na tikete vyžadujú počet
+  // tipov najmenej 3"): Place would do nothing. Checked while filling, so no other leg is placed.
+  const slipText = await btn.evaluate(el => {
+    let n = el;
+    for (let i = 0; i < 10 && n.parentElement && (n.innerText || '').length < 600; i++) n = n.parentElement;
+    return n.innerText || '';
+  }).catch(() => '');
+  const block = SLIP_BLOCK_RE.exec(slipText);
+  if (block) throw new Error(`${leg.book}: the slip refuses this bet ("${slipText.slice(Math.max(0, block.index - 40), block.index + 40).replace(/\s+/g, ' ').trim()}"): not continuing`);
 }
+// Slip messages that mean "this ticket cannot be placed as it is" (min. picks, combination rules).
+const SLIP_BLOCK_RE = /najmenej \d|minim[aá]ln[eyi]+ \d+ tip|vy[zž]aduj[uú] po[cč]et|nemo[zž]no kombin|mindestens \d|at least \d (selection|pick)/i;
+// "Änderungen annehmen" (bet365 DE), "Accept changes", "Prijať zmeny" / "Potvrdiť zmeny" (SK books)
+const ACCEPT_RE = /annehmen|akzeptieren|accept|prija[tť]|potvrdi[tť] zmen/i;
 
 // Banners that cover the page on every load (Megawin's cookie notice): click their close (X)
 // button, never an accept button. site.closePopups lists the close buttons' selectors. They can
@@ -204,18 +231,35 @@ function checkSlip(prices, price, maxDropPct = 0) {
 
 // Finds and clicks the odds button showing leg.price. When the same price sits on several
 // matches (bet365 coupon pages), the button inside the fixture naming this match wins.
-async function clickOdds(page, site, leg, names) {
+async function priceButton(page, site, leg, names) {
   const S = site.selectors;
   await page.waitForSelector(S.oddsButton, { timeout: 15000 });
   const texts = priceTexts(leg.price);
   const found = [];
+  const offScreen = []; // matching price, but scrolled away in a carousel
+  const onScreen = h => h.evaluate(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; });
   for (const h of await page.$$(S.oddsButton)) {
     const t = (await h.evaluate(el => el.innerText || '')).trim();
-    // Carousels keep clones far left/right of the page (Megawin's featured matches): skip those.
-    if (!(await h.evaluate(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }))) continue;
-    // Sites keep hidden copies of markets: only a button with a box on screen can be clicked.
     // The price ends the button's text ("1\n1.59"), not just its digits: "2\n11.59" is not 1.59.
-    if (texts.some(x => t === x || (t.endsWith(x) && !/[\d.,]/.test(t[t.length - x.length - 1]))) && (await h.boundingBox())) found.push(h);
+    if (!texts.some(x => t === x || (t.endsWith(x) && !/[\d.,]/.test(t[t.length - x.length - 1])))) continue;
+    // A handicap / total cell (its line label is filled in) is never the match result.
+    if (site.oddsLine && (await h.evaluate((el, sel) => !!(el.parentElement && (el.parentElement.querySelector(sel)?.textContent || '').trim()), site.oddsLine))) continue;
+    // Sites keep hidden copies of markets: only a button with a box on screen can be clicked.
+    if (!(await h.boundingBox())) continue;
+    // Carousels keep slides (and clones) far left/right of the page (Megawin's featured matches).
+    if (!(await onScreen(h))) { offScreen.push(h); continue; }
+    found.push(h);
+  }
+  // scrollCarousel: a slide that is scrolled away is brought into view, but only one whose row
+  // names this match.
+  if (!found.length && site.scrollCarousel) {
+    for (const h of offScreen) {
+      const row = await h.evaluate(el => { let n = el; for (let i = 0; i < 8 && n.parentElement && (n.innerText || '').length < 60; i++) n = n.parentElement; return n.innerText || ''; });
+      if (!names.some(([hm, aw]) => sameMatch(row, hm, aw))) continue;
+      await h.evaluate(el => el.scrollIntoView({ block: 'center', inline: 'center' }));
+      await sleep(800);
+      if (await onScreen(h)) { found.push(h); break; }
+    }
   }
   if (!found.length) throw new Error(`${leg.book}: odds ${leg.price} not found on page (moved or wrong event)`);
   let target = found[0];
@@ -234,21 +278,131 @@ async function clickOdds(page, site, leg, names) {
       if (around.some(t => names.some(([hm, aw]) => sameMatch(t, hm, aw)))) { target = h; break; }
     }
   }
+  return target;
+}
+
+// Markets other than 1X2 / double chance are clicked by market and label, never by price alone (a
+// match page lists dozens of markets and a price repeats). site.marketUI says where they are:
+//   { tabs, game, button }: market tabs, one block per market (its first line is the market name),
+//   the odds buttons inside it ("Nad (2.5) 1,76"). Tipos and Synottip share this page layout.
+const sgn = x => `${x > 0 ? '+' : ''}${x}`;
+const MARKET_UI = {
+  dnb: (sb, l) => ({ game: ['Stávka bez remízy'], label: l.sel }),
+  totals: (sb, l) => ({ game: ['Celkový počet gólov', 'Celkový počet bodov'], label: `${l.sel === 'O' ? 'Nad' : 'Pod'} (${sb.point})` }),
+  '1h_totals': (sb, l) => ({ game: ['1. polčas - Počet gólov'], label: `${l.sel === 'O' ? 'Nad' : 'Pod'} (${sb.point})` }),
+  ot_totals: (sb, l) => ({ game: ['Počet gólov (vrátane predĺženia a nájazdov)'], label: `${l.sel === 'O' ? 'Nad' : 'Pod'} (${sb.point})` }),
+  btts: (sb, l) => ({ game: ['Obaja dajú gól'], label: l.sel === 'Y' ? 'Áno' : 'Nie' }),
+  spreads: (sb, l) => ({ game: ['Handicap'], label: l.sel === 'H' ? `Tím 1 (${sgn(sb.point)})` : `Tím 2 (${sgn(-sb.point)})` }),
+  ot_spreads: (sb, l) => ({ game: ['Handicap (vrátane predĺženia a nájazdov)'], label: l.sel === 'H' ? `Tím 1 (${sgn(sb.point)})` : `Tím 2 (${sgn(-sb.point)})` }),
+};
+
+async function marketButton(page, site, sb, leg) {
+  const ui = site.marketUI;
+  const spec = ui && MARKET_UI[sb.market] && MARKET_UI[sb.market](sb, leg);
+  if (!spec) throw new Error(`${leg.book}: betting the ${sb.market} market is not set up for this site`);
+  await page.waitForSelector(ui.game, { timeout: 15000 });
+  const texts = priceTexts(leg.price);
+  const find = () => page.evaluateHandle((ui, spec) => {
+    for (const g of document.querySelectorAll(ui.game)) {
+      if (!(g.getBoundingClientRect().width > 0)) continue;
+      if (!spec.game.includes((g.innerText || '').split('\n')[0].trim())) continue;
+      for (const b of g.querySelectorAll(ui.button)) {
+        const t = (b.innerText || '').replace(/\s+/g, ' ').trim();
+        if (t === spec.label || t.startsWith(spec.label + ' ')) return b;
+      }
+    }
+    return null;
+  }, ui, spec);
+  let h = await find();
+  // Not on the first tab: open the market tabs one by one (view only).
+  if (!(await h.evaluate(x => !!x)) && ui.tabs) {
+    for (const tab of await page.$$(ui.tabs)) {
+      await tab.click().catch(() => { });
+      await sleep(1200);
+      h = await find();
+      if (await h.evaluate(x => !!x)) break;
+    }
+  }
+  if (!(await h.evaluate(x => !!x))) throw new Error(`${leg.book}: market "${spec.game[0]}" / "${spec.label}" not found on the match page`);
+  const btn = h.asElement();
+  const t = (await btn.evaluate(el => el.innerText || '')).replace(/\s+/g, ' ').trim();
+  if (!texts.some(x => t.endsWith(' ' + x))) throw new Error(`${leg.book}: "${spec.label}" shows "${t}", not ${leg.price} (odds moved)`);
+  return btn;
+}
+
+// A price read from a match detail knows its own button (leg.pick = { css, label? }): Niké's market
+// row + label, DOXXbet's .Odd_<id>, Tipsport/Chance's [data-id=<id>]. That exact button is clicked,
+// after checking it is visible, shows the label and ends with the price. Its label (button text without
+// the price) is kept in leg.pickText: the slip must show it too.
+async function pickButton(page, site, leg) {
+  const { css, label } = leg.pick;
+  await page.waitForSelector(css, { timeout: 15000 }).catch(() => null);
+  const texts = priceTexts(leg.price);
+  const norm = t => String(t || '').replace(/\s+/g, ' ').trim();
+  for (const h of await page.$$(css)) {
+    const t = norm(await h.evaluate(el => el.innerText || ''));
+    if (label && !t.toLowerCase().includes(label.toLowerCase())) continue;
+    await h.evaluate(el => el.scrollIntoView({ block: 'center' })).catch(() => { });
+    if (!(await h.boundingBox())) continue;
+    const price = texts.find(x => t === x || t.endsWith(' ' + x) || t.startsWith(x + ' '));
+    if (!price) throw new Error(`${leg.book}: the button shows "${t}", not ${leg.price} (odds moved)`);
+    leg.pickText = norm(t.replace(price, '')) || label || null;
+    return h;
+  }
+  throw new Error(`${leg.book}: the market button for this pick is not on the match page (${label || css})`);
+}
+
+async function clickOdds(page, site, leg, names, sb) {
+  const S = site.selectors;
+  const target = leg.pick ? await pickButton(page, site, leg)
+    : sb && sb.market && sb.market !== 'h2h' ? await marketButton(page, site, sb, leg) : await priceButton(page, site, leg, names);
   // A banner or popup over the button (Megawin's cookie notice) takes the click instead.
   await closePopups(page, site);
   await target.evaluate(el => el.scrollIntoView({ block: 'center' }));
   await sleep(300);
-  const cover = await target.evaluate(el => {
+  // What sits on top of the button: null (nothing), or { text, header } where header = it belongs to
+  // a fixed/sticky bar (the site's own top menu), not a popup.
+  const coverOf = () => target.evaluate(el => {
     const r = el.getBoundingClientRect();
     const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return !top || el.contains(top) || top.contains(el) ? null : (top.innerText || top.tagName).replace(/\s+/g, ' ').slice(0, 60);
+    if (!top || el.contains(top) || top.contains(el)) return null;
+    let header = false;
+    for (let n = top; n && n !== document.body; n = n.parentElement) {
+      const pos = getComputedStyle(n).position;
+      if (pos === 'fixed' || pos === 'sticky') { header = n.getBoundingClientRect().top <= 5; break; }
+    }
+    return { text: (top.innerText || top.tagName).replace(/\s+/g, ' ').slice(0, 60), header };
   });
-  if (cover) throw new Error(`${leg.book}: something covers the odds button ("${cover}"): close that banner or popup in its window`);
-  await target.click();
+  let cover = await coverOf();
+  // A row right at the top of a short page stays under the site's fixed top menu (DOXXbet live):
+  // scroll a bit more, and if the menu still covers it, click the button itself.
+  if (cover && cover.header) {
+    await page.evaluate(() => window.scrollBy(0, -200));
+    await sleep(300);
+    cover = await coverOf();
+  }
+  if (cover && !cover.header) throw new Error(`${leg.book}: something covers the odds button ("${cover.text}"): close that banner or popup in its window`);
+  if (cover) await target.evaluate(el => el.click());
+  else await target.click();
   await sleep(site.slipError ? 2000 : 500);
   await closePopups(page, site);
   await openSlip(page, S);
   return target;
+}
+
+// Take a pick back off the slip by clicking its odds button again (sites toggle a picked price).
+// Returns true when the slip is empty afterwards; logs when it is not, so it can be cleared by hand.
+async function unpick(page, S, target, book) {
+  try {
+    if (!S.slipOdds || !(await slipPrices(page, S.slipOdds)).length) return true;
+    if (target && (await target.boundingBox())) {
+      await target.click();
+      await sleep(1500);
+      if (!(await slipPrices(page, S.slipOdds)).length) return true;
+    }
+  } catch { }
+  db.log('warn', `${book}: could not clear the bet slip, clear it by hand in that window`);
+  return false;
 }
 
 // Prepare one leg up to (not including) the Place click.
@@ -293,62 +447,87 @@ async function prepareLeg(settings, sb, leg) {
     throw new Error(`${leg.book}: the bet slip already holds a selection, clear it in that window first`);
   }
 
-  // Click the odds cell whose text is the scanned price.
+  // From the first click on, a leg that stops must not leave its pick on the slip: the next
+  // surebet at this book would refuse to start ("already holds a selection").
   const names = [[sb.home, sb.away], [leg.home, leg.away]].filter(([h, a]) => h && a);
-  let target = await clickOdds(page, site, leg, names);
-  // Bet365 sometimes answers a pick with "Entschuldigung, es ist ein Fehler aufgetreten" and keeps
-  // the slip empty; a hard refresh (cache bypassed) fixes it. One refresh and one more click.
-  if (site.slipError && (await visible(page, site.slipError))) {
-    if (S.slipOdds && (await slipPrices(page, S.slipOdds)).length) throw new Error(`${leg.book}: the site showed an error after the pick, check the slip in that window`);
-    const cdp = await page.target().createCDPSession();
-    await cdp.send('Page.reload', { ignoreCache: true });
-    await cdp.detach().catch(() => { });
-    await sleep(8000);
-    await closePopups(page, site);
-    target = await clickOdds(page, site, leg, names);
-    if (await visible(page, site.slipError)) throw new Error(`${leg.book}: the site rejected the pick twice ("${(await (await visible(page, site.slipError)).evaluate(el => el.innerText)).trim().slice(0, 60)}")`);
-  }
+  let target = null;
+  try {
+    // Click the odds cell whose text is the scanned price.
+    target = await clickOdds(page, site, leg, names, sb);
+    // Bet365 sometimes answers a pick with "Entschuldigung, es ist ein Fehler aufgetreten" and keeps
+    // the slip empty; a hard refresh (cache bypassed) fixes it. One refresh and one more click.
+    if (site.slipError && (await visible(page, site.slipError))) {
+      if (S.slipOdds && (await slipPrices(page, S.slipOdds)).length) throw new Error(`${leg.book}: the site showed an error after the pick, check the slip in that window`);
+      const cdp = await page.target().createCDPSession();
+      await cdp.send('Page.reload', { ignoreCache: true });
+      await cdp.detach().catch(() => { });
+      await sleep(8000);
+      await closePopups(page, site);
+      target = await clickOdds(page, site, leg, names, sb);
+      if (await visible(page, site.slipError)) throw new Error(`${leg.book}: the site rejected the pick twice ("${(await (await visible(page, site.slipError)).evaluate(el => el.innerText)).trim().slice(0, 60)}")`);
+    }
 
-  // Hidden copies of the stake box exist before the slip opens: wait for a visible one.
-  // Some sites ignore a click made before their slip has loaded (Megawin right after opening):
-  // click once more, but only while the slip is still empty (a second click on a picked price
-  // would remove it again).
-  let box = await page.waitForSelector(S.stakeInput, { visible: true, timeout: 5000 }).catch(() => null);
-  if (!box && S.slipOdds && !(await slipPrices(page, S.slipOdds)).length && (await target.boundingBox())) {
-    await sleep(2000);
-    await target.click();
-    await sleep(500);
+    // Hidden copies of the stake box exist before the slip opens: wait for a visible one.
+    // Some sites ignore a click made before their slip has loaded (Megawin right after opening):
+    // click once more, but only while the slip is still empty (a second click on a picked price
+    // would remove it again).
+    let box = await page.waitForSelector(S.stakeInput, { visible: true, timeout: 5000 }).catch(() => null);
+    if (!box && S.slipOdds && !(await slipPrices(page, S.slipOdds)).length && (await target.boundingBox())) {
+      await sleep(2000);
+      await target.click();
+      await sleep(500);
+      await closePopups(page, site);
+      await openSlip(page, S);
+    }
+    if (!box) await page.waitForSelector(S.stakeInput, { visible: true, timeout: 8000 });
+    if (S.euroToggle) await ensureEuro(page, S);
     await closePopups(page, site);
-    await openSlip(page, S);
-  }
-  if (!box) await page.waitForSelector(S.stakeInput, { visible: true, timeout: 8000 });
-  if (S.euroToggle) await ensureEuro(page, S);
-  await closePopups(page, site);
-  await typeStake(page, S.stakeInput, leg, { keypad: !!site.stakeKeypad });
-  // Some slips switch units (Chance "€ / G" coins): "Staviť 1 G" would not bet euros.
-  const placeBtn = await visible(page, S.placeButton);
-  if (!placeBtn) throw new Error(`${leg.book}: no visible Place button on the slip`);
-  const label = await placeBtn.evaluate(el => el.innerText).catch(() => '');
-  if (!placeLabelIn(label, leg.currency)) throw new Error(`${leg.book}: the slip is not in ${unitOf(leg)} ("${label.trim()}"), switch it in that window`);
+    await typeStake(page, S.stakeInput, leg, { keypad: !!site.stakeKeypad });
+    // Some slips switch units (Chance "€ / G" coins): "Staviť 1 G" would not bet euros.
+    const placeBtn = await visible(page, S.placeButton);
+    if (!placeBtn) throw new Error(`${leg.book}: no visible Place button on the slip`);
+    const label = await placeBtn.evaluate(el => el.innerText).catch(() => '');
+    if (!placeLabelIn(label, leg.currency)) throw new Error(`${leg.book}: the slip is not in ${unitOf(leg)} ("${label.trim()}"), switch it in that window`);
 
-  if (S.slipOdds) {
-    const prices = await slipPrices(page, S.slipOdds);
-    const why = checkSlip(prices, leg.price, settings.maxOddsDropPct);
-    if (why) throw new Error(`${leg.book}: ${why}`);
-    leg.slipPrice = prices[0];
-    // League pages list many matches and the same price can repeat: the slip must name this match.
-    const slipText = await (await visible(page, S.slipOdds)).evaluate(el => {
-      let n = el;
-      for (let i = 0; i < 6 && n.parentElement && (n.innerText || '').length < 40; i++) n = n.parentElement;
-      return n.innerText || '';
-    });
-    if (!names.some(([h, a]) => sameMatch(slipText, h, a))) throw new Error(`${leg.book}: the slip shows "${slipText.replace(/\s+/g, ' ').slice(0, 60)}", not ${sb.home} - ${sb.away}`);
+    if (S.slipOdds) {
+      const prices = await slipPrices(page, S.slipOdds);
+      const why = checkSlip(prices, leg.price, settings.maxOddsDropPct);
+      if (why) throw new Error(`${leg.book}: ${why}`);
+      leg.slipPrice = prices[0];
+      // League pages list many matches and the same price can repeat: the slip must name this match.
+      // Read around the slip line that holds the price: live pages (Tipsport, Chance) reuse the slip's
+      // class for labels like "Kurzy nie sú aktuálne", and the first match can be one of those.
+      const slipText = await page.$$eval(S.slipOdds, els => {
+        const line = els.find(e => e.getBoundingClientRect().width > 0 && /^\s*\d{1,3}[.,]\d{1,3}\s*$/.test(e.innerText || '')) || els.find(e => e.getBoundingClientRect().width > 0);
+        let n = line;
+        for (let i = 0; n && i < 6 && n.parentElement && (n.innerText || '').length < 40; i++) n = n.parentElement;
+        return (n && n.innerText) || '';
+      });
+      if (!names.some(([h, a]) => sameMatch(slipText, h, a))) throw new Error(`${leg.book}: the slip shows "${slipText.replace(/\s+/g, ' ').slice(0, 60)}", not ${sb.home} - ${sb.away}`);
+      // Other markets: the slip must also name the market and the pick ("Celkový počet gólov Tip: Nad (2.5)").
+      if (leg.pick && leg.pickText) {
+        const flat = slipText.replace(/\s+/g, ' ').toLowerCase();
+        // Slips word picks their own way (DOXXbet: button "Menej ako 0.5", slip "Počet gólov 0.5 ... Menej"):
+        // the whole label, or its first word plus every number in it, must be on the slip.
+        const lbl = leg.pickText.toLowerCase();
+        const nums = lbl.match(/\d+(?:[.,]\d+)?/g) || [];
+        const ok = flat.includes(lbl) || (flat.includes(lbl.split(' ')[0]) && nums.every(n => flat.includes(n) || flat.includes(n.replace('.', ','))));
+        if (!ok) throw new Error(`${leg.book}: the slip shows "${slipText.replace(/\s+/g, ' ').slice(0, 80)}", not "${leg.pickText}"`);
+      } else if (sb.market && sb.market !== 'h2h' && MARKET_UI[sb.market]) {
+        const spec = MARKET_UI[sb.market](sb, leg);
+        const flat = slipText.replace(/\s+/g, ' ');
+        if (!spec.game.some(g => flat.includes(g)) || !flat.includes(spec.label)) throw new Error(`${leg.book}: the slip shows "${flat.slice(0, 80)}", not ${spec.game[0]} / ${spec.label}`);
+      }
+    }
+    // Slips can re-render after typing (Chance's € switch reset 1 to its 10 € default): settle, re-check.
+    await sleep(1500);
+    await verifySlip(page, S, leg);
+    const shownStake = leg.currency === 'EUR' ? `${leg.stake}` : `${leg.local} ${unitOf(leg)} (${leg.stake} €)`;
+    return { leg, page, site, target, ready: true, note: `stake ${shownStake} on slip @ ${leg.slipPrice || leg.price}` };
+  } catch (e) {
+    await unpick(page, S, target, leg.book);
+    throw e;
   }
-  // Slips can re-render after typing (Chance's € switch reset 1 to its 10 € default): settle, re-check.
-  await sleep(1500);
-  await verifySlip(page, S, leg);
-  const shownStake = leg.currency === 'EUR' ? `${leg.stake}` : `${leg.local} ${unitOf(leg)} (${leg.stake} €)`;
-  return { leg, page, site, ready: true, note: `stake ${shownStake} on slip @ ${leg.slipPrice || leg.price}` };
 }
 
 // Polls read() until the balance is at least `stake` below `before`. true = the money left the account.
@@ -381,48 +560,107 @@ async function placeLeg(p) {
   return 'unconfirmed';
 }
 
+// Minimum profit for a bet: live odds move within seconds, so live surebets need more margin.
+const minPct = (settings, live) => (live ? Number(settings.autoLiveMinProfitPct ?? 4) : Number(settings.autoMinProfitPct));
+
+// Is a new surebet worth betting at all, in fill or auto mode? (null = yes)
+function betAllowed(settings, sb) {
+  const min = minPct(settings, sb.live);
+  if (sb.profitPct < min) return `profit ${sb.profitPct}% < ${min}%${sb.live ? ' (live)' : ''}`;
+  // Markets other than 1X2 / double chance: only where clicking that market is set up and tested.
+  if (sb.market && sb.market !== 'h2h') {
+    const all = sites.load();
+    const no = [...new Set(sb.legs.filter(l => !l.pick).map(l => l.book))].filter(b => !((all[b] && all[b].betMarkets) || []).includes(sb.market));
+    if (no.length) return `${sb.market} betting not set up at ${no.join(', ')}`;
+  }
+  // Suspect = one price far above the other books. With autoBetSuspect it is still bet: the price
+  // actually shown on every slip is re-checked against the minimum before Place.
+  if (sb.suspect && !settings.autoBetSuspect) return 'suspect: a price is far above the other books (likely stale)';
+  if (settings.autoPrematchOnly && sb.live) return 'live: pre-match only';
+  return null;
+}
+
 function autoAllowed(settings, sb) {
-  if (sb.profitPct < settings.autoMinProfitPct) return `profit ${sb.profitPct}% < ${settings.autoMinProfitPct}%`;
+  const why = betAllowed(settings, sb);
+  if (why) return why;
   if (sb.staked > settings.autoMaxStakeTotal) return `stake ${sb.staked} > max ${settings.autoMaxStakeTotal}`;
-  if (sb.suspect) return 'suspect: a price is far above the other books (likely stale)';
-  if (settings.autoPrematchOnly && sb.live) return 'live bets disabled for auto';
   if (db.autoBetsToday() >= settings.autoDailyMaxBets) return 'daily auto-bet limit reached';
   return null;
+}
+
+// Live auto bets use their own, smaller total: at most autoLiveMaxStakeTotal (default 2) per surebet,
+// in 0.10 steps (0.50 min a leg), so a few euros prove the live path before it gets more money (best split, see arb).
+function liveStakes(settings, sb) {
+  if (!sb.live) return { sb };
+  const total = Number(settings.autoLiveMaxStakeTotal ?? 2);
+  if (!(total > 0) || sb.staked <= total) return { sb };
+  const arb = require('../arb');
+  const st = arb.bestSplit(sb.legs.map(l => l.price), total, arb.SMALL_STEP, arb.SMALL_MIN_LEG);
+  if (!(st.worstProfit > 1e-9)) return { error: `live max ${total} per surebet: no split locks in a profit at these prices` };
+  const legs = sb.legs.map((l, j) => ({ ...l, stake: st.stakes[j] }));
+  return { sb: { ...sb, legs, staked: st.staked, worstProfit: Math.round(st.worstProfit * 100) / 100 } };
 }
 
 // Per-bookmaker cap on ONE bet (settings.bookmakers.<book>.maxStakePerBet, in your currency).
 // If any leg is above its book's cap, ALL legs are scaled down by the same factor so the
 // surebet stays balanced. Returns the (possibly scaled) surebet, or { error }.
+function capOf(settings, book) {
+  const bk = settings.bookmakers[book] || {};
+  // Percentage of the bankroll you keep at this book wins; else the fixed per-bet cap.
+  // The live balance (read from the logged-in window) replaces the typed-in bankroll.
+  const bankroll = balances.fresh(book) ?? Number(bk.bankroll);
+  const pct = bankroll > 0 && Number(bk.stakePercent) > 0 ? bankroll * Number(bk.stakePercent) / 100 : 0;
+  return pct || Number(bk.maxStakePerBet);
+}
+
 function applyStakeCaps(settings, sb) {
   let factor = 1;
   for (const l of sb.legs) {
-    const bk = settings.bookmakers[l.book] || {};
-    // Percentage of the bankroll you keep at this book wins; else the fixed per-bet cap.
-    // The live balance (read from the logged-in window) replaces the typed-in bankroll.
-    const bankroll = balances.fresh(l.book) ?? Number(bk.bankroll);
-    const pct = bankroll > 0 && Number(bk.stakePercent) > 0 ? bankroll * Number(bk.stakePercent) / 100 : 0;
-    const cap = pct || Number(bk.maxStakePerBet);
+    const cap = capOf(settings, l.book);
     if (!(cap > 0)) return { error: `${l.book}: set bankroll + stake % (or a max stake per bet) for auto` };
     factor = Math.min(factor, cap / l.stake);
   }
   if (factor >= 1) return { sb };
-  const step = settings.roundStakeTo || 1;
-  const legs = sb.legs.map(l => ({ ...l, stake: Math.floor(l.stake * factor / step) * step }));
-  if (legs.some(l => l.stake < step)) return { error: 'stake cap too small for this surebet' };
-  const staked = legs.reduce((a, l) => a + l.stake, 0);
-  const worst = Math.min(...legs.map(l => l.stake * l.price)) - staked;
-  if (worst <= 0) return { error: 'after stake caps and rounding the surebet no longer locks in a profit' };
-  return { sb: { ...sb, legs, staked, worstProfit: Math.round(worst * 100) / 100 } };
+  // Re-split a smaller total (best split, see arb) until every leg fits its book's cap.
+  const arb = require('../arb');
+  const caps = sb.legs.map(l => capOf(settings, l.book));
+  const prices = sb.legs.map(l => l.price);
+  const small = sb.staked * factor < 30;
+  const step = small ? arb.SMALL_STEP : (settings.roundStakeTo || 1);
+  for (let total = Math.floor(sb.staked * factor / step + 1e-9) * step; total > 0; total = Math.round((total - step) * 100) / 100) {
+    const st = small ? arb.bestSplit(prices, total, step, arb.SMALL_MIN_LEG) : arb.bestSplit(prices, total, step);
+    if (!(st.worstProfit > 1e-9)) continue;
+    if (st.stakes.some((x, i) => x > caps[i] + 1e-9)) continue;
+    const legs = sb.legs.map((l, i) => ({ ...l, stake: st.stakes[i] }));
+    return { sb: { ...sb, legs, staked: st.staked, worstProfit: Math.round(st.worstProfit * 100) / 100 } };
+  }
+  return { error: 'after stake caps and rounding the surebet no longer locks in a profit' };
 }
 
 // Last check before clicking Place: with the odds actually shown on each slip and the real stakes,
-// is it still a surebet with enough margin?
-function stillProfitable(settings, legs) {
+// is it still a surebet with the full minimum profit (autoMinProfitPct, live: autoLiveMinProfitPct)?
+function stillProfitable(settings, legs, live = false) {
+  if (legs.some(l => l.slipPrice === 0)) return { ok: false, pct: 0 }; // a slip price could not be read
   const staked = legs.reduce((a, l) => a + l.stake, 0);
   const worst = Math.min(...legs.map(l => l.stake * (l.slipPrice || l.price))) - staked;
   const pct = worst / staked * 100;
-  return { ok: pct >= settings.autoMinProfitPct * 0.5, pct: Math.round(pct * 100) / 100 };
+  return { ok: pct >= minPct(settings, live), pct: Math.round(pct * 100) / 100 };
 }
+
+// Re-read the price on every filled slip (exactly one priced line, else 0 = unreadable).
+async function readSlips(ok) {
+  await Promise.all(ok.map(async p => {
+    const S = p.site.selectors;
+    if (S.slipOdds) {
+      // Same reading as when filling: visible slip lines that hold a price (Megawin's first line
+      // is the market name), and exactly one of them.
+      const prices = await slipPrices(p.page, S.slipOdds);
+      p.leg.slipPrice = prices.length === 1 ? prices[0] : 0;
+    }
+  }));
+}
+
+const legLine = p => `${p.leg.book}: ${p.leg.sel} @ ${p.leg.slipPrice || p.leg.price}${p.leg.slipPrice && p.leg.slipPrice !== p.leg.price ? ` (scan ${p.leg.price})` : ''}, stake ${p.leg.stake} ${unitOf(p.leg)}`;
 
 async function execute(settings, sb, { mode = settings.betMode, manual = false } = {}) {
   if (mode === 'off') return { status: 'skipped', detail: 'betMode off' };
@@ -430,11 +668,30 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
   if (mode === 'auto' && !manual) {
     let why = autoAllowed(settings, sb);
     if (!why) {
-      const capped = applyStakeCaps(settings, sb);
+      const small = liveStakes(settings, sb);
+      const capped = small.error ? small : applyStakeCaps(settings, small.sb);
       if (capped.error) why = capped.error; else sb = capped.sb;
     }
-    if (why) mode = 'fill', db.log('info', `auto -> fill for ${sb.home}-${sb.away}: ${why}`);
+    // No fallback to fill: nobody is waiting to click Place, and a filled slip left behind would
+    // block the next surebet at that book.
+    if (why) {
+      db.log('info', `auto skipped ${sb.home}-${sb.away}: ${why}`);
+      return { status: 'skipped', detail: why };
+    }
   }
+  // One match, one bet: a sibling surebet of a match that is being bet (or was bet) is skipped:
+  // it would double the exposure on that match and fight over the same betting tabs.
+  const ev = sb.eventId || sb.key.split('|')[0];
+  if (activeEvents.has(ev)) return { status: 'skipped', detail: 'another bet on this match is running' };
+  if ((betEvents.has(ev) || db.eventBets(ev).placed) && !manual) return { status: 'skipped', detail: 'this match was already bet' };
+  activeEvents.add(ev);
+  // Every book has one betting tab: a leg waits (up to 90 s) until no other bet uses that book.
+  const books = [...new Set(sb.legs.map(l => l.book))];
+  for (const t0 = Date.now(); books.some(b => busyBooks.has(b)); ) {
+    if (Date.now() - t0 > 90000) { activeEvents.delete(ev); return { status: 'skipped', detail: 'bookmaker busy with another bet' }; }
+    await sleep(500);
+  }
+  books.forEach(b => busyBooks.add(b));
   inFlight.add(sb.key);
   const betId = db.addBet(sb.key, mode, 'pending', '');
   const title = `${sb.home} - ${sb.away} (${marketLabel(sb)}, +${sb.profitPct}%)`;
@@ -445,54 +702,102 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
     const errs = results.filter(r => r.status === 'rejected').map(r => r.reason.message);
     const notes = ok.map(p => `${p.leg.book}: ${p.note}`).concat(errs.map(e => `ERR ${e}`)).join(' | ');
 
+    // An auto attempt that stops after filling takes every pick back off its slip; whatever cannot
+    // be cleared is reported, because it blocks the next bet at that book.
+    const clearAll = async () => {
+      if (mode !== 'auto') return;
+      const stuck = [];
+      for (const p of ok) if (!(await unpick(p.page, p.site.selectors, p.target, p.leg.book))) stuck.push(p.leg.book);
+      if (stuck.length) notify.send(settings, `Clear the bet slip by hand at ${stuck.join(', ')} (an auto bet stopped before Place: ${title})`).catch(() => { });
+    };
+    // alertsOnlyBets: Telegram gets only bets you can place now and bets that were placed.
+    const quiet = settings.alertsOnlyBets;
     const allReady = errs.length === 0 && ok.every(p => p.ready);
-    if (mode !== 'auto' || !allReady) {
+    if (!allReady) {
       const status = errs.length ? 'failed' : 'filled';
       db.setBet(betId, status, notes);
       db.log(errs.length ? 'warn' : 'info', `[${mode}] ${title}: ${notes}`);
-      notify.send(settings, `${status === 'filled' ? 'Ready, confirm in the windows' : 'Could not prepare'}: ${title}\n${notes}`).catch(() => { });
+      if (!quiet) notify.send(settings, `${status === 'filled' ? 'Ready, confirm in the windows' : 'Could not prepare'}: ${title}\n${notes}`).catch(() => { });
+      await clearAll();
       return { status, detail: notes };
     }
 
-    // Auto = all or nothing. Every leg must have a known balance that covers its stake,
-    // and the odds on EVERY slip are re-read right before the clicks.
+    // Every slip is filled: re-read the odds on EVERY slip and recompute the profit with the real
+    // stakes. Below autoMinProfitPct nothing is placed (auto) or you are told not to place (fill).
+    await readSlips(ok);
+    const chk = stillProfitable(settings, ok.map(p => p.leg), !!sb.live);
+    const legs = ok.map(legLine).join('\n');
+    if (!chk.ok) {
+      const detail = `odds changed on the slips, profit now ${chk.pct}% < ${minPct(settings, sb.live)}%: not placed. ${notes}`;
+      db.setBet(betId, 'failed', detail);
+      db.log('warn', `[${mode}] ${title}: ${detail}`);
+      // In fill mode the slips sit in the windows, so say so even when quiet.
+      if (mode !== 'auto') notify.send(settings, `DO NOT PLACE (odds changed, profit now ${chk.pct}%): ${title}\n${legs}`).catch(() => { });
+      else if (!quiet) notify.send(settings, `Not placed (odds changed): ${title}\n${detail}`).catch(() => { });
+      await clearAll();
+      return { status: 'failed', detail };
+    }
+    if (mode !== 'auto') {
+      db.setBet(betId, 'filled', `rechecked ${chk.pct}% | ${notes}`);
+      db.log('info', `[${mode}] ${title}: rechecked ${chk.pct}% | ${notes}`);
+      notify.send(settings, `Ready to place, rechecked +${chk.pct}%: ${title}\n${legs}\nCheck each slip and click Place in every window.`).catch(() => { });
+      return { status: 'filled', detail: notes };
+    }
+
+    // Auto = all or nothing. Every leg must have a known balance that covers its stake.
     const noBal = ok.filter(p => p.leg.balance == null).map(p => p.leg.book);
     if (noBal.length) {
       const detail = `cannot read the balance at ${noBal.join(', ')} (set the balance selector): not placed. ${notes}`;
       db.setBet(betId, 'failed', detail);
-      notify.send(settings, `Not placed: ${title}\n${detail}`).catch(() => { });
+      if (!quiet) notify.send(settings, `Not placed: ${title}\n${detail}`).catch(() => { });
+      await clearAll();
       return { status: 'failed', detail };
     }
-    await Promise.all(ok.map(async p => {
-      const S = p.site.selectors;
-      if (S.slipOdds) {
-        // Same reading as when filling: visible slip lines that hold a price (Megawin's first line
-        // is the market name), and exactly one of them.
-        const prices = await slipPrices(p.page, S.slipOdds);
-        p.leg.slipPrice = prices.length === 1 ? prices[0] : 0;
+    if (!quiet) notify.send(settings, `Balances OK (${ok.map(p => `${p.leg.book} ${p.leg.balance} ${unitOf(p.leg)}`).join(', ')}), odds hold (+${chk.pct}%), placing all legs now: ${title}`).catch(() => { });
+    // One leg at a time, the least proven book first: if a leg is not confirmed, the rest are NOT
+    // placed (their picks are taken off), so a site that refuses a bet costs nothing when it goes
+    // first. Before each next leg its slip is read again; it is placed only if the whole surebet
+    // still loses at most COMPLETE_MAX_LOSS_PCT (completing beats holding an open position).
+    const order = [...ok].sort((a, b) => provenCount(a.leg.book) - provenCount(b.leg.book));
+    const legResult = new Map(); // p -> 'confirmed' | 'unconfirmed' | Error | 'skipped'
+    for (const p of order) {
+      const done = order.filter(q => legResult.get(q) === 'confirmed');
+      if (done.length) {
+        await readSlips([p]);
+        const legsNow = order.map(q => q.leg);
+        const pct = worstPct(legsNow);
+        if (!(p.leg.slipPrice > 0) || pct < -COMPLETE_MAX_LOSS_PCT) { legResult.set(p, new Error(`odds on its slip moved too far (${p.leg.slipPrice || '?'}, surebet now ${pct}%)`)); break; }
       }
-    }));
-    const chk = stillProfitable(settings, ok.map(p => p.leg));
-    if (!chk.ok) {
-      const detail = `odds changed on the slips, profit now ${chk.pct}%: not placed. ${notes}`;
-      db.setBet(betId, 'failed', detail);
-      db.log('warn', `[auto] ${title}: ${detail}`);
-      notify.send(settings, `Not placed (odds changed): ${title}\n${detail}`).catch(() => { });
-      return { status: 'failed', detail };
+      try { legResult.set(p, await placeLeg(p)); } catch (e) { legResult.set(p, e); }
+      if (legResult.get(p) !== 'confirmed') break;
     }
-    notify.send(settings, `Balances OK (${ok.map(p => `${p.leg.book} ${p.leg.balance} ${unitOf(p.leg)}`).join(', ')}), odds hold, placing all legs now: ${title}`).catch(() => { });
-    const placed = await Promise.allSettled(ok.map(placeLeg));
-    const status = placedStatus(placed.map(r => (r.status === 'fulfilled' ? r.value : 'failed')));
-    const detail = placed.map((r, i) => `${ok[i].leg.book}: ${r.status === 'fulfilled' ? (r.value === 'confirmed' ? 'PLACED' : 'CLICKED, NOT CONFIRMED') : 'FAILED ' + r.reason.message}`).join(' | ');
+    for (const p of order) if (!legResult.has(p)) {
+      legResult.set(p, 'skipped');
+      await unpick(p.page, p.site.selectors, p.target, p.leg.book);
+    }
+    const res = ok.map(p => legResult.get(p));
+    const anyClicked = res.some(r => r === 'confirmed' || r === 'unconfirmed');
+    const status = anyClicked ? placedStatus(res.map(r => (r === 'confirmed' || r === 'unconfirmed' ? r : 'failed'))) : 'failed';
+    if (anyClicked) betEvents.add(ev); // Place was clicked on this match: no second bet on it
+    const detail = ok.map((p, i) => `${p.leg.book}: ${res[i] === 'confirmed' ? 'PLACED' : res[i] === 'unconfirmed' ? 'CLICKED, NOT CONFIRMED' : res[i] === 'skipped' ? 'not placed (an earlier leg failed)' : 'FAILED ' + res[i].message}`).join(' | ');
     db.setBet(betId, status, detail);
     db.log(status === 'placed' ? 'info' : 'error', `[auto] ${title}: ${detail}`);
     const head = {
       placed: 'Placed',
       partial: 'WARNING: only part of the bet was placed, you hold an open position!',
       unconfirmed: 'CHECK NOW: Place was clicked but not every leg is confirmed. Look at the bet history in each window.',
-      failed: 'Failed',
+      failed: 'Not placed (nothing was bet)',
     }[status];
-    notify.send(settings, `${head}\n${title}\n${detail}`).catch(() => { });
+    // An open position: work out how to cover it from the latest scan (best price elsewhere).
+    let cover = '';
+    if (status === 'partial' || status === 'unconfirmed') {
+      const held = ok.filter((p, i) => res[i] === 'confirmed').map(p => p.leg);
+      const missing = ok.filter((p, i) => res[i] !== 'confirmed').map(p => p.leg);
+      const c = coverPlan(sb, held, missing, ok.filter((p, i) => res[i] !== 'confirmed').map(p => p.leg.book));
+      cover = c ? `\nTO COVER IT: ${c.text}` : '\nNo cover found in the latest scan: check the other books by hand.';
+      db.log('warn', `cover ${title}: ${cover.trim()}`);
+    }
+    if (status !== 'failed' || !quiet) notify.send(settings, `${head}\n${title}\n${legs}\n${detail}${cover}`).catch(() => { });
     balances.refreshAll(settings).catch(() => { });
     return { status, detail };
   } catch (e) {
@@ -501,7 +806,48 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
     return { status: 'failed', detail: e.message };
   } finally {
     inFlight.delete(sb.key);
+    activeEvents.delete(ev);
+    // A match page (live ones above all) keeps growing in memory: the betting tab goes back to a
+    // blank page once the attempt is over. Slips are kept by the site, not by the page.
+    for (const b of books) {
+      const port = settings.bookmakers[b] && settings.bookmakers[b].port;
+      if (port) await chrome.betPage(port).then(pg => pg.goto('about:blank')).catch(() => { });
+    }
+    books.forEach(b => busyBooks.delete(b));
   }
+}
+
+const COMPLETE_MAX_LOSS_PCT = 2;
+// Worst outcome of a set of legs, in % of the total stake (slip price when read, else scanned).
+function worstPct(legs) {
+  const staked = legs.reduce((a, l) => a + l.stake, 0);
+  const worst = Math.min(...legs.map(l => l.stake * (l.slipPrice || l.price))) - staked;
+  return Math.round(worst / staked * 10000) / 100;
+}
+// How many bets a book has confirmed so far (from the bets table): least proven goes first.
+function provenCount(book) {
+  try {
+    return db.db.prepare("SELECT count(*) n FROM bets WHERE status IN ('placed','partial','unconfirmed') AND detail LIKE ?").get(`%${book}: PLACED%`).n;
+  } catch { return 0; }
+}
+// Cover for an open position: for each missing selection the best price at another book in the
+// latest scan, staked so it pays what the held legs pay. -> { text, profit } or null.
+function coverPlan(sb, held, missing, avoidBooks) {
+  let events = [];
+  try { const st = require('../scanner').state; events = [...(st.events || []), ...(st.liveEvents || [])]; } catch { }
+  const ev = events.find(e => e.id === sb.eventId);
+  if (!ev || !held.length) return null;
+  const pay = Math.min(...held.map(l => l.stake * (l.slipPrice || l.price)));
+  const legs = [];
+  for (const m of missing) {
+    const offers = ev.odds.filter(o => o.market === sb.market && (o.point ?? null) === (sb.point ?? null) && o.sel === m.sel && !avoidBooks.includes(o.book));
+    if (!offers.length) return null;
+    const best = offers.reduce((a, b) => (b.price > a.price ? b : a));
+    legs.push({ book: best.book, sel: m.sel, price: best.price, stake: Math.ceil(pay / best.price), link: best.link });
+  }
+  const staked = held.reduce((a, l) => a + l.stake, 0) + legs.reduce((a, l) => a + l.stake, 0);
+  const worst = Math.min(pay, ...legs.map(l => l.stake * l.price)) - staked;
+  return { profit: Math.round(worst * 100) / 100, text: legs.map(l => `${l.book} ${l.sel} @ ${l.price}, stake ${l.stake} € ${l.link || ''}`).join(' + ') + ` -> ${worst >= 0 ? '+' : ''}${Math.round(worst * 100) / 100} € whatever happens` };
 }
 
 // Leg results ('confirmed' | 'unconfirmed' | 'failed') -> one status for the whole surebet.
@@ -513,4 +859,6 @@ function placedStatus(legs) {
   return 'unconfirmed';
 }
 
-module.exports = { execute, prepareLeg, applyStakeCaps, stillProfitable, parseMoney, waitForDrop, placedStatus, stakeText, stakeMatches, checkSlip, sameMatch };
+const busy = () => inFlight.size > 0;
+
+module.exports = { execute, busy, betAllowed, liveStakes, worstPct, coverPlan, SLIP_BLOCK_RE, MARKET_UI, unpick, prepareLeg, applyStakeCaps, stillProfitable, parseMoney, waitForDrop, placedStatus, stakeText, stakeMatches, checkSlip, sameMatch };

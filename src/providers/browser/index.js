@@ -8,6 +8,8 @@ const { mergeBooks } = require('./match');
 const SPORTS = require('./sports');
 const oddsapiio = require('../oddsapiio');
 const db = require('../../db');
+const chrome = require('../../bettor/chrome');
+const sites = require('../../bettor/sites');
 
 function collectorFor(key) {
   const f = path.join(__dirname, `${key}.js`);
@@ -54,6 +56,21 @@ async function timed(label, fn) {
   }
 }
 
+// A CDP call timed out: the book's scan tab is most likely frozen. Swap it for a fresh tab
+// (bet365 has many tabs and its own per-tab recovery). Returns true when a tab was replaced.
+async function recoverFrozen(k, s, e) {
+  if (k === 'bet365' || !chrome.isTimeout(e)) return false;
+  try {
+    const site = sites.load()[k];
+    const url = site && await chrome.replaceFrozenTab(s.bookmakers[k].port, site.domain);
+    if (url) db.log('warn', `${k}: scan tab froze (CDP timeout), opened a fresh tab on ${url}`);
+    return !!url;
+  } catch (err) {
+    db.log('warn', `${k}: could not replace frozen tab: ${err.message}`);
+    return false;
+  }
+}
+
 // Returns { [bookKey]: events[] } for every enabled book, plus per-book stats.
 async function collectAll(s, sportKeys) {
   const enabled = Object.entries(s.bookmakers).filter(([, b]) => b.enabled);
@@ -66,7 +83,11 @@ async function collectAll(s, sportKeys) {
     return paced(k, s, () => timed(k, async () => {
       const all = [], errs = [];
       for (const sk of sportKeys) {
-        try { all.push(...await mod.collect(s, [sk])); } catch (e) { errs.push(`${sk}: ${e.message}`); }
+        try { all.push(...await mod.collect(s, [sk])); } catch (e) {
+          errs.push(`${sk}: ${e.message}`);
+          // frozen tab: replace it and skip this book's remaining sports (each would wait 60 s)
+          if (chrome.isTimeout(e)) { await recoverFrozen(k, s, e); break; }
+        }
       }
       if (errs.length) db.log('warn', `${k}: ${errs.join(' | ')}`);
       if (!all.length && errs.length) throw new Error(errs.join(' | '));
@@ -91,6 +112,35 @@ async function collectAll(s, sportKeys) {
   return perBook;
 }
 
+// Extra markets from books that only give them per match (detail requests): fetched only for
+// matches another enabled book quotes on those markets too (else no surebet is possible), soonest
+// kick-off first, within a time budget. A failed detail read never breaks the scan.
+// Chance last: it reuses Tipsport's details (same match ids and prices) instead of asking Chance (HTTP 429).
+const DETAIL_BOOKS = ['doxxbet', 'nike', 'tipsport', 'chance'];
+async function addDetails(s, merged) {
+  const now = Date.now();
+  for (const book of DETAIL_BOOKS) {
+    if (!(s.bookmakers[book] && s.bookmakers[book].enabled)) continue;
+    const mod = collectorFor(book);
+    if (!mod || typeof mod.details !== 'function') continue;
+    const want = merged
+      .filter(e => !e.live && e.start > now && (book === 'doxxbet' || book === 'nike' ? true : e.sport === 'football') && e.odds.some(o => o.book === book) && e.odds.some(o => o.book !== book && o.market !== 'h2h'))
+      .sort((a, b) => a.start - b.start);
+    const linkOf = e => (e.odds.find(o => o.book === book && o.link) || {}).link;
+    const links = [...new Set(want.map(linkOf).filter(Boolean))];
+    if (!links.length) continue;
+    try {
+      const t0 = Date.now();
+      const got = await mod.details(s, links); // fresh cached details; a background queue fetches the rest
+      let n = 0;
+      for (const e of want) { const extra = got.get(linkOf(e)); if (extra && extra.length) { e.odds.push(...extra); n++; } }
+      db.log('debug', `${book} details: ${n}/${links.length} matches, ${Date.now() - t0} ms`);
+    } catch (e) {
+      db.log('warn', `${book} details: ${e.message}`);
+    }
+  }
+}
+
 function scanSports(s) {
   return (s.scanSports || ['football', 'tennis']).filter(k => SPORTS[k]);
 }
@@ -102,6 +152,7 @@ async function fetchEvents(s) {
   // Tipsport first: its names become the group's display names.
   const order = Object.keys(perBook).sort((a, b) => (a === 'tipsport' ? -1 : b === 'tipsport' ? 1 : 0));
   const merged = mergeBooks(order.map(k => perBook[k]), m => db.log('debug', `${Object.entries(stats).map(([k, v]) => `${k} ${v.events}${v.ok ? '' : ' ERR'} ${v.ms}ms`).join(', ')} | ${m}`));
+  await addDetails(s, merged);
   return merged.map(e => ({ ...e, sportTitle: SPORTS[e.sport].name, drawPossible: SPORTS[e.sport].draw }));
 }
 
@@ -115,7 +166,7 @@ async function fetchLive(s) {
     .filter(([k, b]) => b.enabled && (b.source || 'browser') === 'browser' && b.live !== false)
     .map(([k]) => [k, collectorFor(k)])
     .filter(([, m]) => m && typeof m.collectLive === 'function');
-  const res = await Promise.all(books.map(([k, m]) => timed(`${k} live`, () => m.collectLive(s, sportKeys)).then(x => [k, x])));
+  const res = await Promise.all(books.map(([k, m]) => timed(`${k} live`, () => m.collectLive(s, sportKeys).catch(async e => { await recoverFrozen(k, s, e); throw e; })).then(x => [k, x])));
   liveStats = {};
   const lists = [];
   for (const [k, x] of res) {
