@@ -844,7 +844,9 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
   }
 }
 
-const COMPLETE_MAX_LOSS_PCT = 2;
+// Once a leg is placed, the rest are placed even at a small loss: an open position is far worse than a
+// sure small loss (live Poprad - Bystrica stopped at -3.4 % and left a half bet open, 2026-11-13).
+const COMPLETE_MAX_LOSS_PCT = 10;
 // Worst outcome of a set of legs, in % of the total stake (slip price when read, else scanned).
 function worstPct(legs) {
   const staked = legs.reduce((a, l) => a + l.stake, 0);
