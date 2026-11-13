@@ -231,6 +231,40 @@ function checkSlip(prices, price, maxDropPct = 0) {
 
 // Finds and clicks the odds button showing leg.price. When the same price sits on several
 // matches (bet365 coupon pages), the button inside the fixture naming this match wins.
+// Which 1X2 / double-chance outcome a button or slip label stands for. Books label them with codes
+// ("1", "0"/"X", "10"/"1X", "02"/"X2", "12") or words ("Remíza", "Neprehra HK Poprad", "Nebude remíza",
+// a team name). -> { sel, by: 'code' | 'name' } or null when the label does not say.
+// Live HK Poprad - Banská Bystrica, 2026-11-13: Tipsport had 1X and X2 both at 1.54, the first 1.54
+// (1X, "Neprehra HK Poprad") was clicked for an X2 leg and both bets ended up on Poprad.
+const foldTxt = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+const teamIn = (text, team) => foldTxt(team).split(/[^a-z0-9]+/).filter(w => w.length >= 4).some(w => text.includes(w));
+function outcomeOf(label, home, away) {
+  const t = foldTxt(label);
+  if (!t) return null;
+  const code = { '1': '1', x: 'X', '0': 'X', '2': '2', '1x': '1X', '10': '1X', x2: 'X2', '02': 'X2', '12': '12' }[t];
+  if (code) return { sel: code, by: 'code' };
+  if (/nebude remiz|no draw|kein unentschieden/.test(t)) return { sel: '12', by: 'name' };
+  const dc = /neprehra|neprehraje|or draw|oder unentschieden|alebo remiz/.test(t);
+  const h = home && teamIn(t, home), a = away && teamIn(t, away);
+  if (dc && h && !a) return { sel: '1X', by: 'name' };
+  if (dc && a && !h) return { sel: 'X2', by: 'name' };
+  if (!dc && /^(remiza|draw|unentschieden|nerozhodne)$/.test(t)) return { sel: 'X', by: 'name' };
+  if (!dc && h && !a) return { sel: '1', by: 'name' };
+  if (!dc && a && !h) return { sel: '2', by: 'name' };
+  return null;
+}
+// Does this label contradict the leg's outcome? (true = it names another outcome)
+function wrongOutcome(label, leg, names) {
+  for (const [hm, aw] of names) {
+    const o = outcomeOf(label, hm, aw);
+    if (!o) continue;
+    // a code is the book's own wording (bookSel for a match listed the other way round), a team name is not
+    const want = o.by === 'code' ? (leg.bookSel || leg.sel) : leg.sel;
+    return o.sel !== want ? o.sel : false;
+  }
+  return false;
+}
+
 async function priceButton(page, site, leg, names) {
   const S = site.selectors;
   await page.waitForSelector(S.oddsButton, { timeout: 15000 });
@@ -265,6 +299,24 @@ async function priceButton(page, site, leg, names) {
     }
   }
   if (!found.length) throw new Error(`${leg.book}: odds ${leg.price} not found on page (moved or wrong event)`);
+  // Same price, other outcome (1X and X2 both 1.54): a button whose label names another outcome is never
+  // clicked. Buttons with only a price stay candidates (lists without labels).
+  const priceOnly = t => t.replace(new RegExp(`\\s*(${texts.map(x => x.replace('.', '\\.')).join('|')})\\s*$`), '').trim();
+  // 1st choice: a button whose label names exactly this outcome. 2nd: a button with no label at all (lists
+  // that show only prices). Never one labelled for another outcome or another market ("Viac ako 0.5",
+  // a handicap, goals): on a match page a price repeats across dozens of markets.
+  const OTHER_MARKET = /viac ako|menej ako|nad |pod |over|under|handicap|g[oó]l|goal|bod|point|set|polčas|polcas|half|\(|[+-]\d/i;
+  const labelled = [];
+  for (const h of found) {
+    const label = priceOnly((await h.evaluate(el => el.innerText || '')).trim());
+    const right = names.some(([hm, aw]) => { const o = outcomeOf(label, hm, aw); return o && o.sel === (o.by === 'code' ? (leg.bookSel || leg.sel) : leg.sel); });
+    labelled.push({ h, label, right, wrong: wrongOutcome(label, leg, names), other: !right && OTHER_MARKET.test(label) });
+  }
+  const exact = labelled.filter(x => x.right).map(x => x.h);
+  const bare = labelled.filter(x => !x.label).map(x => x.h);
+  const fit = exact.length ? exact : bare.length ? bare : labelled.filter(x => !x.wrong && !x.other).map(x => x.h);
+  if (!fit.length) throw new Error(`${leg.book}: no ${leg.price} button for ${leg.bookSel || leg.sel} (${labelled.map(x => `"${x.label}"`).slice(0, 3).join(', ')}): not clicked`);
+  found.length = 0; found.push(...fit);
   let target = found[0];
   if (found.length > 1) {
     for (const h of found) {
@@ -518,6 +570,16 @@ async function prepareLeg(settings, sb, leg) {
       });
       if (!names.some(([h, a]) => sameMatch(slipText, h, a))) throw new Error(`${leg.book}: the slip shows "${slipText.replace(/\s+/g, ' ').slice(0, 60)}", not ${sb.home} - ${sb.away}`);
       // Other markets: the slip must also name the market and the pick ("Celkový počet gólov Tip: Nad (2.5)").
+      // 1X2 / double chance: the slip must not name another outcome ("Neprehra HK Poprad" for an X2 leg).
+      if ((sb.market || 'h2h') === 'h2h' && !leg.pick) {
+        const flat = slipText.replace(/\s+/g, ' ');
+        const m = /(neprehra|nebude remíza|nebude remiza)[^0-9]{0,40}/i.exec(flat);
+        const w = m ? wrongOutcome(m[0], leg, names) : false;
+        if (w) throw new Error(`${leg.book}: the slip shows "${m[0].trim()}" (${w}), not ${leg.sel}: not continuing`);
+        // ...and no other market at all: a 1X2 leg that landed on "Menej ako 4.5" at the same price
+        const other = /viac ako|menej ako|\bnad\b|\bpod\b|\bover\b|\bunder\b|handicap|po[cč]et g[oó]lov|\bgoals?\b|\bbodov\b|\bset\b|pol[cč]as|\bhalf\b/i.exec(flat);
+        if (other) throw new Error(`${leg.book}: the slip shows another market ("${flat.slice(Math.max(0, other.index - 20), other.index + 30).trim()}"), not the match result: not continuing`);
+      }
       if (leg.pick && leg.pickText) {
         const flat = slipText.replace(/\s+/g, ' ').toLowerCase();
         // Slips word picks their own way (DOXXbet: button "Menej ako 0.5", slip "Počet gólov 0.5 ... Menej"):
@@ -914,4 +976,4 @@ function placedStatus(legs) {
 
 const busy = () => inFlight.size > 0;
 
-module.exports = { execute, busy, betAllowed, liveStakes, worstPct, coverPlan, SLIP_BLOCK_RE, MARKET_UI, unpick, prepareLeg, applyStakeCaps, stillProfitable, parseMoney, waitForDrop, placedStatus, stakeText, stakeMatches, checkSlip, sameMatch };
+module.exports = { execute, busy, betAllowed, liveStakes, worstPct, coverPlan, SLIP_BLOCK_RE, MARKET_UI, outcomeOf, wrongOutcome, unpick, prepareLeg, applyStakeCaps, stillProfitable, parseMoney, waitForDrop, placedStatus, stakeText, stakeMatches, checkSlip, sameMatch };

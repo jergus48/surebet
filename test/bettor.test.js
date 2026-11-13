@@ -156,3 +156,21 @@ console.log('bettor tests passed');
   assert.strictEqual(betAllowed(s, { profitPct: 5, live: false, legs: [{ book: 'nike', sel: '1' }, { book: 'tipos', sel: '2' }] }), null);
   console.log('data-only tests passed');
 }
+
+// outcome labels: same price, other outcome is never clicked (live Poprad: 1X and X2 both 1.54)
+{
+  const { outcomeOf, wrongOutcome } = require('../src/bettor');
+  const H = 'HK Poprad', A = 'Banská Bystrica', names = [[H, A]];
+  assert.deepStrictEqual(outcomeOf('Neprehra HK Poprad', H, A), { sel: '1X', by: 'name' });
+  assert.deepStrictEqual(outcomeOf('Neprehra Banská Bystrica', H, A), { sel: 'X2', by: 'name' });
+  assert.deepStrictEqual(outcomeOf('Nebude remíza', H, A), { sel: '12', by: 'name' });
+  assert.deepStrictEqual(outcomeOf('Remíza', H, A), { sel: 'X', by: 'name' });
+  assert.deepStrictEqual(outcomeOf('HK Poprad', H, A), { sel: '1', by: 'name' });
+  assert.deepStrictEqual(outcomeOf('02', H, A), { sel: 'X2', by: 'code' });
+  assert.strictEqual(outcomeOf('', H, A), null);
+  assert.strictEqual(wrongOutcome('Neprehra HK Poprad', { sel: 'X2' }, names), '1X'); // the Poprad mistake
+  assert.strictEqual(wrongOutcome('Neprehra Banská Bystrica', { sel: 'X2' }, names), false);
+  assert.strictEqual(wrongOutcome('', { sel: 'X2' }, names), false);              // price-only button: no verdict
+  assert.strictEqual(wrongOutcome('10', { sel: 'X2', bookSel: '1X' }, names), false); // swapped book: its own code
+  console.log('outcome label tests passed');
+}
