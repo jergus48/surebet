@@ -62,12 +62,20 @@ function overview(s) {
   const ledger = db.ledger();
   const net = {}; // deposits - withdrawals after the book's starting balance
   for (const e of ledger) if (!first[e.book] || e.ts >= first[e.book].ts) net[e.book] = (net[e.book] || 0) + (e.type === 'deposit' ? e.amount : -e.amount);
+  // latest placed bet per book: a balance read before it still counts that stake as in the account
+  const lastBet = {};
+  for (const b of placed) for (const l of (b.legs && b.legs.legs) || []) if (l.placed !== false) lastBet[l.book] = Math.max(lastBet[l.book] || 0, b.created);
+  let stale = false;
   const books = Object.entries(s.bookmakers).filter(([, b]) => b.enabled).map(([k, b]) => {
     const now = snap[k] && snap[k].amount != null ? snap[k].amount : null;
+    const old = now != null && lastBet[k] && snap[k].at < lastBet[k] + 15000;
+    if (old) stale = true;
     const start = first[k] ? first[k].amount : null;
     return { book: k, name: b.name || k, now, at: snap[k] ? snap[k].at : null, error: snap[k] ? snap[k].error : null, start, startAt: first[k] ? first[k].ts : null,
-      deposits: r2(net[k] || 0), change: now != null && start != null ? r2(now - start - (net[k] || 0)) : null };
+      deposits: r2(net[k] || 0), change: now != null && start != null ? r2(now - start - (net[k] || 0)) : null, stale: !!old };
   });
+  // out-of-date balance after a bet: read again now (at most once a minute), the page refreshes itself
+  if (stale && Date.now() - (overview.refreshedAt || 0) > 60000) { overview.refreshedAt = Date.now(); balances.refreshAll(s).catch(() => { }); }
   const open = [], done = [];
   for (const b of placed) {
     const L = b.legs;
@@ -88,7 +96,7 @@ function overview(s) {
     books, open, done: done.slice(0, 20),
     totals: { now: sum('now'), start: r2(known.reduce((a, b) => a + (b.start ?? b.now), 0)), deposits: sum('deposits'),
       change: r2(known.reduce((a, b) => a + (b.change || 0), 0)), openStake, openPayout, openLocked: r2(openPayout - openStake),
-      expected: r2(known.reduce((a, b) => a + (b.change || 0), 0) + openPayout), missing: books.filter(b => b.now == null).map(b => b.book) },
+      expected: r2(known.reduce((a, b) => a + (b.change || 0), 0) + openPayout), missing: books.filter(b => b.now == null).map(b => b.book), stale },
   };
 }
 

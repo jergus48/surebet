@@ -381,9 +381,10 @@ function renderOverview(o) {
   ].map(([l, v]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
   $('ovBooks').innerHTML = '<tr><th>Bookmaker</th><th>Now</th><th>At the start</th><th>Deposits − withdrawals</th><th>Change</th><th>Read at</th></tr>' +
     o.books.map(b => `<tr><td><b>${esc(b.name)}</b></td><td>${b.now == null ? `<span class="red">${esc(b.error || 'not read')}</span>` : ovEur(b.now)}</td>
-      <td>${ovEur(b.start)}</td><td>${b.deposits ? ovEur(b.deposits) : '–'}</td><td>${ovSgn(b.change)}</td><td class="muted">${b.at ? dt(b.at) : '–'}</td></tr>`).join('');
+      <td>${ovEur(b.start)}</td><td>${b.deposits ? ovEur(b.deposits) : '–'}</td><td>${ovSgn(b.change)}</td><td class="${b.stale ? 'amber' : 'muted'}">${b.at ? dt(b.at) : '–'}${b.stale ? ' (before the latest bet)' : ''}</td></tr>`).join('');
   $('ovNote').innerHTML = `At the start = the balance right before the first bet at that bookmaker. Change = now − at the start − deposits + withdrawals (Money table under History). Money in open bets is out of the balance until the match ends, hence "profit incl. open bets" (with the surebets' guaranteed payout).` +
-    (t.missing.length ? ` <span class="amber">No balance: ${esc(t.missing.join(', '))} (left out of the totals).</span>` : '');
+    (t.missing.length ? ` <span class="amber">No balance: ${esc(t.missing.join(', '))} (left out of the totals).</span>` : '')
+    + (t.stale ? ' <span class="amber">A balance was read before its latest bet: re-reading it now, totals settle in a minute.</span>' : '');
   const head = '<tr><th>#</th><th>Match</th><th>Legs</th><th>Stake</th><th>Guaranteed payout</th><th>Locked profit</th></tr>';
   $('ovOpen').innerHTML = head + (o.open.length ? o.open.map(betRow).join('') : '<tr><td colspan="6" class="muted">No bet is waiting for a result.</td></tr>');
   $('ovDone').innerHTML = head + (o.done.length ? o.done.map(betRow).join('') : '<tr><td colspan="6" class="muted">Nothing yet.</td></tr>');

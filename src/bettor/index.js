@@ -845,6 +845,8 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
     }
     if (status !== 'failed' || !quiet) notify.send(settings, `${head}\n${title}\n${legs}\n${detail}${cover}`).catch(() => { });
     balances.refreshAll(settings).catch(() => { });
+    // some books show the deducted balance only after a while: read them again a bit later
+    setTimeout(() => balances.refreshAll(settings).catch(() => { }), 20000).unref?.();
     return { status, detail };
   } catch (e) {
     db.setBet(betId, 'failed', e.message);
