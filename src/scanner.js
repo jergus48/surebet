@@ -43,6 +43,14 @@ function reportNew(s, sb, siblings = []) {
 // Same surebet still there, profit moved by >= 0.5 points: send an update.
 function maybeUpdate(s, sb, siblings = []) {
   const prev = lastAlert.get(sb.key);
+  // A surebet first seen under the minimum that has risen above it (live TPS Turku - Jokerit 3.69 % ->
+  // 4.9 %, 2026-11-13) gets its bet now, when the match has no attempt yet.
+  if (s.betMode === 'auto' && prev != null && prev < sb.profitPct && !bettor.betAllowed(s, sb) && !db.eventBets(sb.eventId || sb.key.split('|')[0]).n) {
+    db.log('info', `now above the minimum: ${sb.home}-${sb.away} ${prev}% -> ${sb.profitPct}%`);
+    lastAlert.set(sb.key, sb.profitPct);
+    bettor.execute(s, sb).catch(e => db.log('error', `bettor: ${e.message}`));
+    return;
+  }
   if (prev == null || Math.abs(sb.profitPct - prev) < 0.5) return;
   if (sb.suspect && !s.alertSuspect) return;
   db.log('info', `UPDATE ${sb.home}-${sb.away} ${prev}% -> ${sb.profitPct}%`);
@@ -54,12 +62,13 @@ function maybeUpdate(s, sb, siblings = []) {
 // A surebet that is still there after its bet attempt failed (a page timed out, odds moved for a
 // moment) is tried again: at most RETRY_MAX attempts per match, RETRY_MS apart, never on a match
 // that already has a bet (placed, partial, unconfirmed or still running).
-const RETRY_MS = 5 * 60 * 1000, RETRY_MAX = 3;
+const RETRY_MS = 5 * 60 * 1000, RETRY_LIVE_MS = 30 * 1000, RETRY_MAX = 3;
 function maybeRetry(s, sb) {
-  if (s.betMode !== 'auto' || sb.live) return; // live surebets are re-reported by the live loop
+  if (s.betMode !== 'auto') return;
   if (bettor.betAllowed(s, sb)) return;
   const ev = db.eventBets(sb.eventId || sb.key.split('|')[0]);
-  if (!ev.n || ev.placed || ev.n >= RETRY_MAX || Date.now() - ev.last < RETRY_MS) return;
+  // live odds move in seconds: a live surebet that is still there is retried after 30 s
+  if (!ev.n || ev.placed || ev.n >= RETRY_MAX || Date.now() - ev.last < (sb.live ? RETRY_LIVE_MS : RETRY_MS)) return;
   db.log('info', `retry bet ${sb.home}-${sb.away} (+${sb.profitPct}%, attempt ${ev.n + 1})`);
   bettor.execute(s, sb).catch(e => db.log('error', `bettor: ${e.message}`));
 }
@@ -131,7 +140,7 @@ async function livePollOnce() {
       db.upsertSurebet(sb); // history (insert once, then updates last seen / max profit)
       // Alert once per appearance; again only if it vanished for 2+ minutes.
       if (!seen.alertedAt || now - seen.alertedAt > 120000) { seen.alertedAt = now; reportNew(s, sb, siblingsOf(found, sb)); }
-      else maybeUpdate(s, sb, siblingsOf(found, sb));
+      else { maybeUpdate(s, sb, siblingsOf(found, sb)); maybeRetry(s, sb); }
     }
     // A candidate missing from this poll loses its streak.
     for (const [k, v] of liveSeen) if (!present.has(k)) { v.count = 0; if (now - v.lastSeen > 600000) liveSeen.delete(k); }

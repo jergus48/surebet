@@ -591,6 +591,9 @@ function betAllowed(settings, sb) {
   // Suspect = one price far above the other books. With autoBetSuspect it is still bet: the price
   // actually shown on every slip is re-checked against the minimum before Place.
   if (sb.flipped) return 'the books disagree who the favourite is (likely two different teams): never bet';
+  // Two legs at one bookmaker (Tipsport 1 + Tipsport X) are one ticket on its slip, not two bets,
+  // and they fight over the same betting tab: never auto-bet (2026-11-13, a timed-out attempt).
+  if (sb.legs && new Set(sb.legs.map(l => l.book)).size < sb.legs.length) return 'two legs at the same bookmaker (one ticket, not separate bets)';
   if (sb.suspect && !settings.autoBetSuspect) return 'suspect: a price is far above the other books (likely stale)';
   if (settings.autoPrematchOnly && sb.live) return 'live: pre-match only';
   return null;
@@ -703,7 +706,8 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
   // it would double the exposure on that match and fight over the same betting tabs.
   const ev = sb.eventId || sb.key.split('|')[0];
   if (activeEvents.has(ev)) return { status: 'skipped', detail: 'another bet on this match is running' };
-  if ((betEvents.has(ev) || db.eventBets(ev).placed) && !manual) return { status: 'skipped', detail: 'this match was already bet' };
+  // also for the dashboard's Open button: a match already bet is never filled again (it doubles the position)
+  if (betEvents.has(ev) || db.eventBets(ev).placed) return { status: 'skipped', detail: 'this match was already bet: not filled again (that would double the position)' };
   activeEvents.add(ev);
   // Every book has one betting tab: a leg waits (up to 90 s) until no other bet uses that book.
   const books = [...new Set(sb.legs.map(l => l.book))];
