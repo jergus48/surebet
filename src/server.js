@@ -119,7 +119,7 @@ function csv(rows) {
 const SETTABLE = new Set(['provider', 'oddsApiKey', 'oddsApiRegions', 'oddsApiBookmakers', 'oddsApiMarkets', 'sports', 'pollSeconds', 'minCreditsLeft',
   'minProfitPct', 'maxProfitPct', 'maxOddsAgeSec', 'liveSeconds', 'liveMaxAgeSec', 'liveConfirmPolls', 'liveMinProfitPct', 'liveMaxProfitPct', 'includeLive', 'bankrollPerBet', 'stakeTiers', 'roundStakeTo', 'telegramBotToken', 'telegramChatId',
   'scanSports', 'tipsportLimit', 'bet365WaitSec', 'bet365Routes', 'oddsApiIoKey', 'apiHoursAhead', 'apiMaxEventsPerSport',
-  'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'autoLiveMinProfitPct', 'autoLiveMaxStakeTotal', 'autoBetSuspect', 'alertSuspect', 'alertsOnlyBets', 'maxOddsDropPct', 'bookmakers', 'dashboardPassword',
+  'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoDailyMaxPerCombo', 'autoPrematchOnly', 'autoLiveMinProfitPct', 'autoLiveMaxStakeTotal', 'autoBetSuspect', 'alertSuspect', 'alertsOnlyBets', 'maxOddsDropPct', 'bookmakers', 'dashboardPassword',
   'balanceEverySec', 'lowBalanceAlert']);
 
 async function api(req, res, url) {

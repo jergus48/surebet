@@ -193,6 +193,7 @@
         <div><label>Auto: max. bets/day</label><input id="s-autoDailyMaxBets" type="number"></div>
         <div><label>Auto: pre-match only</label><select id="s-autoPrematchOnly"><option value="true">yes</option><option value="false">no</option></select></div>
         <div><label>Auto: min. profit % live</label><input id="s-autoLiveMinProfitPct" type="number" step="0.1"></div>
+        <div><label>Auto: max bets/day per bookmaker combination</label><input id="s-autoDailyMaxPerCombo" type="number" min="0" step="1"></div>
         <div><label>Auto: max total stake live</label><input id="s-autoLiveMaxStakeTotal" type="number" step="0.5"></div>
         <div><label>Auto: bet suspect surebets</label><select id="s-autoBetSuspect"><option value="true">yes (slip prices re-checked)</option><option value="false">no</option></select></div>
         <div><label>Telegram alerts for suspect surebets (stale-looking leg)</label><select id="s-alertSuspect"><option value="false">no (history only)</option><option value="true">yes</option></select></div>
@@ -489,9 +490,9 @@ async function bet(key, mode) {
 }
 
 const FIELDS = ['provider', 'oddsApiIoKey', 'apiHoursAhead', 'oddsApiKey', 'oddsApiRegions', 'oddsApiBookmakers', 'oddsApiMarkets', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct',
-  'bankrollPerBet', 'roundStakeTo', 'includeLive', 'telegramBotToken', 'telegramChatId', 'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'autoLiveMinProfitPct', 'autoLiveMaxStakeTotal', 'autoBetSuspect', 'alertSuspect', 'alertsOnlyBets', 'maxOddsDropPct',
+  'bankrollPerBet', 'roundStakeTo', 'includeLive', 'telegramBotToken', 'telegramChatId', 'betMode', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoPrematchOnly', 'autoLiveMinProfitPct', 'autoLiveMaxStakeTotal', 'autoBetSuspect', 'autoDailyMaxPerCombo', 'alertSuspect', 'alertsOnlyBets', 'maxOddsDropPct',
   'balanceEverySec', 'lowBalanceAlert'];
-const NUM = new Set(['apiHoursAhead', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct', 'bankrollPerBet', 'roundStakeTo', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoLiveMinProfitPct', 'autoLiveMaxStakeTotal', 'maxOddsDropPct',
+const NUM = new Set(['apiHoursAhead', 'pollSeconds', 'minCreditsLeft', 'minProfitPct', 'maxProfitPct', 'bankrollPerBet', 'roundStakeTo', 'autoMinProfitPct', 'autoMaxStakeTotal', 'autoDailyMaxBets', 'autoDailyMaxPerCombo', 'autoLiveMinProfitPct', 'autoLiveMaxStakeTotal', 'maxOddsDropPct',
   'balanceEverySec', 'lowBalanceAlert']);
 const BOOL = new Set(['includeLive', 'autoPrematchOnly', 'autoBetSuspect', 'alertSuspect', 'alertsOnlyBets']);
 

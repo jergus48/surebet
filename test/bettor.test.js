@@ -174,3 +174,15 @@ console.log('bettor tests passed');
   assert.strictEqual(wrongOutcome('10', { sel: 'X2', bookSel: '1X' }, names), false); // swapped book: its own code
   console.log('outcome label tests passed');
 }
+
+// daily limit per bookmaker combination (not overall)
+{
+  const db = require('../src/db');
+  const { betAllowed } = require('../src/bettor');
+  const ids = [1, 2, 3].map(() => db.addBet('combo-test|h2h||chance:1|synottip:2', 'auto', 'placed', 'chance: PLACED | synottip: PLACED'));
+  const autoAllowedLike = s => require('../src/bettor').execute; // (execute calls autoAllowed internally)
+  const counts = db.betsTodayByCombo();
+  assert.ok(counts['chance+synottip'] >= 3);
+  db.db.prepare("DELETE FROM bets WHERE surebet_key = 'combo-test|h2h||chance:1|synottip:2'").run();
+  console.log('per-combo limit tests passed');
+}

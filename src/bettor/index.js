@@ -668,7 +668,12 @@ function autoAllowed(settings, sb) {
   const why = betAllowed(settings, sb);
   if (why) return why;
   if (sb.staked > settings.autoMaxStakeTotal) return `stake ${sb.staked} > max ${settings.autoMaxStakeTotal}`;
-  if (db.autoBetsToday() >= settings.autoDailyMaxBets) return 'daily auto-bet limit reached';
+  // overall daily limit only when set above 0
+  if (Number(settings.autoDailyMaxBets) > 0 && db.autoBetsToday() >= settings.autoDailyMaxBets) return 'daily auto-bet limit reached';
+  // per bookmaker combination: at most autoDailyMaxPerCombo bets a day on the same books (e.g. chance+synottip)
+  const combo = [...new Set((sb.legs || []).map(l => l.book))].sort().join('+');
+  const perCombo = Number(settings.autoDailyMaxPerCombo ?? 3);
+  if (perCombo > 0 && combo && (db.betsTodayByCombo()[combo] || 0) >= perCombo) return `daily limit for ${combo} reached (${perCombo})`;
   return null;
 }
 

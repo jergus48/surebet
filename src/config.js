@@ -63,6 +63,7 @@ const DEFAULTS = {
   alertsOnlyBets: true, // Telegram: only bets (slips ready to place, placed), no plain surebet alerts
   autoPrematchOnly: true,
   autoLiveMaxStakeTotal: 2, // live auto bets: total stake per surebet, 0.5 steps (small while live is new)
+  autoDailyMaxPerCombo: 3, // at most this many auto bets a day on the same bookmaker combination
   autoBetSuspect: true, // bet suspect surebets too (the slip prices are re-checked before Place)
   autoLiveMinProfitPct: 4, // live surebets need at least this (odds move within seconds)
   maxOddsDropPct: 0.0, // abort a leg if slip odds are lower than scanned odds by more than this

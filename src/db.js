@@ -133,6 +133,20 @@ module.exports = {
     const rows = db.prepare("SELECT created, status FROM bets WHERE substr(surebet_key, 1, ?) = ?").all(eventId.length + 1, eventId + '|');
     return { n: rows.length, last: Math.max(0, ...rows.map(r => r.created)), placed: rows.some(r => /^(placed|partial|unconfirmed|pending)$/.test(r.status)) };
   },
+  // Today's bets (Place clicked) per bookmaker combination, e.g. { 'chance+synottip': 2 }. A bet's books
+  // come from its stored legs, or from its detail ("tipsport: PLACED | doxxbet: PLACED") for older rows.
+  betsTodayByCombo: () => {
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    const out = {};
+    for (const b of db.prepare("SELECT legs, detail FROM bets WHERE created >= ? AND status IN ('placed','partial','unconfirmed')").all(d.getTime())) {
+      let books = [];
+      try { books = (JSON.parse(b.legs || 'null') || { legs: [] }).legs.filter(l => l.placed !== false).map(l => l.book); } catch { }
+      if (!books.length) books = [...String(b.detail || '').matchAll(/(?:^|\| )([a-z0-9]+): /g)].map(m => m[1]);
+      const key = [...new Set(books)].sort().join('+');
+      if (key) out[key] = (out[key] || 0) + 1;
+    }
+    return out;
+  },
   autoBetsToday: () => {
     const d = new Date(); d.setHours(0, 0, 0, 0);
     return q.betsSince.get(d.getTime()).n;
