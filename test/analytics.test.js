@@ -12,6 +12,8 @@ const cleanup = () => {
   if (realStart) rdb.prepare("INSERT OR REPLACE INTO study_meta (k, v) VALUES ('start', ?)").run(realStart.v); // keep a running study's start date
 };
 try {
+// a fresh study for this test (the real one may already be past its 7 days); cleanup() puts the real start back
+rdb.prepare("INSERT OR REPLACE INTO study_meta (k, v) VALUES ('start', ?)").run(now);
 record([ev('t' + now, [o('a', '1', 2.1), o('b', '2', 2.05), o('c', '1', 1.5), o('c', '2', 1.5)])], { now, force: true });
 const r = report(['a', 'b', 'c', 'd'], now);
 // report() lists the top 40 combos only; a running study has more, so look in the table
