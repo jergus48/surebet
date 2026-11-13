@@ -39,9 +39,20 @@ function proxyArgs(bookKey) {
   return [`--proxy-server=${proxy}`, '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'];
 }
 
+// Bot windows run without extensions: a profile signed in to Chrome pulls in every synced extension
+// (ad blockers, site blockers, VPNs), and those blocked Cloudflare's check on Stake (white page,
+// ERR_BLOCKED_BY_CLIENT, 2026-11-13). settings.bookmakers.<book>.extensions = true keeps them (e.g.
+// Megawin with a VPN extension).
+function extensionArgs(bookKey) {
+  let on = false;
+  try { on = require('../config').load().bookmakers[bookKey]?.extensions === true; } catch { }
+  return on ? [] : ['--disable-extensions'];
+}
+
 function launchArgs(port, bookKey) {
   return [
     ...proxyArgs(bookKey),
+    ...extensionArgs(bookKey),
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profileDir(bookKey)}`,
     '--disable-background-timer-throttling',
