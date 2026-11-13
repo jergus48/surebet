@@ -591,6 +591,9 @@ function betAllowed(settings, sb) {
   // Suspect = one price far above the other books. With autoBetSuspect it is still bet: the price
   // actually shown on every slip is re-checked against the minimum before Place.
   if (sb.flipped) return 'the books disagree who the favourite is (likely two different teams): never bet';
+  // bookmakers.<book>.dataOnly: read for odds (and the study), never bet there (e.g. Stake: too little balance)
+  const dataOnly = [...new Set((sb.legs || []).map(l => l.book))].filter(b => settings.bookmakers && settings.bookmakers[b] && settings.bookmakers[b].dataOnly);
+  if (dataOnly.length) return `${dataOnly.join(', ')}: data only (no bets there)`;
   // Two legs at one bookmaker (Tipsport 1 + Tipsport X) are one ticket on its slip, not two bets,
   // and they fight over the same betting tab: never auto-bet (2026-11-13, a timed-out attempt).
   if (sb.legs && new Set(sb.legs.map(l => l.book)).size < sb.legs.length) return 'two legs at the same bookmaker (one ticket, not separate bets)';

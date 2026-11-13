@@ -43,10 +43,21 @@ function proxyArgs(bookKey) {
 // (ad blockers, site blockers, VPNs), and those blocked Cloudflare's check on Stake (white page,
 // ERR_BLOCKED_BY_CLIENT, 2026-11-13). settings.bookmakers.<book>.extensions = true keeps them (e.g.
 // Megawin with a VPN extension).
+// extensions: true = all the profile's extensions; ["<extension id>", ...] = only those (e.g. the VPN,
+// without the synced ad/site blockers that break Cloudflare checks); anything else = none.
 function extensionArgs(bookKey) {
   let on = false;
-  try { on = require('../config').load().bookmakers[bookKey]?.extensions === true; } catch { }
-  return on ? [] : ['--disable-extensions'];
+  try { on = require('../config').load().bookmakers[bookKey]?.extensions; } catch { }
+  if (on === true) return [];
+  if (Array.isArray(on) && on.length) {
+    const dirs = on.map(id => {
+      const base = path.join(profileDir(bookKey), 'Default', 'Extensions', String(id).replace(/[^a-p]/g, ''));
+      const ver = fs.existsSync(base) ? fs.readdirSync(base).sort().pop() : null;
+      return ver ? path.join(base, ver) : null;
+    }).filter(Boolean);
+    if (dirs.length) return [`--disable-extensions-except=${dirs.join(',')}`, `--load-extension=${dirs.join(',')}`];
+  }
+  return ['--disable-extensions'];
 }
 
 function launchArgs(port, bookKey) {

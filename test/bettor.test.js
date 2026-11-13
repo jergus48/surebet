@@ -147,3 +147,12 @@ console.log('bettor tests passed');
   assert.strictEqual(c.profit, 2.11);
   console.log('open position tests passed');
 }
+
+// data-only bookmakers are read but never bet
+{
+  const { betAllowed } = require('../src/bettor');
+  const s = { autoMinProfitPct: 3, bookmakers: { stake: { dataOnly: true }, nike: {} } };
+  assert.ok(/stake: data only/.test(betAllowed(s, { profitPct: 5, live: false, legs: [{ book: 'stake', sel: '1' }, { book: 'nike', sel: '2' }] })));
+  assert.strictEqual(betAllowed(s, { profitPct: 5, live: false, legs: [{ book: 'nike', sel: '1' }, { book: 'tipos', sel: '2' }] }), null);
+  console.log('data-only tests passed');
+}
