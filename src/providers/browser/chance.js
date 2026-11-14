@@ -42,6 +42,11 @@ function parse(json, sportKey) {
           if (!m.participantHome || !m.participantVisiting) continue; // outrights, specials
           const odds = [];
           for (const row of m.oppRows || []) {
+            // A row with a draw is the regular-time 1/X/2 market. In a sport without a draw (basketball) its 1 and 2
+            // are NOT the winner incl. overtime the other books quote: a tie after regulation goes to overtime and
+            // both legs can lose. Chance's basketball list has only that row (Cleveland 2.24 / X 14 / Dallas 1.83,
+            // 2026-11-14), and dropping the X here turned it into fake winner prices (Fenerbahçe - Efes was bet so).
+            if (!DRAW.has(sportKey) && (row.oppsTab || []).some(o => o && /^(x|1x|x2)$/i.test(String(o.type)))) continue;
             for (const o of row.oppsTab || []) {
               if (!o) continue; // empty slot (outcome not offered)
               const sel = SEL[String(o.type).toLowerCase()];

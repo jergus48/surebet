@@ -145,3 +145,26 @@ console.log('arb tests passed');
   assert.strictEqual(ttlFor(Date.now() + 3600e3, 170000), 170000);
   console.log('far kick-off age tests passed');
 }
+
+// incoherent markets: a book's own complete market under 100 %, or two prices for one pick, never makes a surebet
+{
+  const assert = require('assert');
+  const { findSurebets, dropIncoherent } = require('../src/arb');
+  // Chance basketball "winner" = regular-time 1/X/2 without the X: 99.3 %, and a real 2-way elsewhere
+  const ev = { id: 'b', sport: 'basketball', home: 'Cleveland', away: 'Dallas', start: 1, drawPossible: false, odds: [
+    { book: 'chance', market: 'h2h', sel: '1', price: 2.24 }, { book: 'chance', market: 'h2h', sel: '2', price: 1.83 },
+    { book: 'tipos', market: 'h2h', sel: '1', price: 2.0 }, { book: 'tipos', market: 'h2h', sel: '2', price: 1.78 }] };
+  const why = [];
+  const found = findSurebets([ev], { minProfitPct: 0, bankroll: 30, step: 1, onIncoherent: (e, w) => why.push(...w) });
+  assert.ok(found.every(f => !f.legs.some(l => l.book === 'chance')), JSON.stringify(found.map(f => f.legs)));
+  assert.ok(/chance h2h: 1 2.24 \/ 2 1.83 adds up to 99.3 %/.test(why[0]), why[0]);
+  // a normal book market (over 100 %) is kept
+  assert.strictEqual(dropIncoherent([{ book: 'a', market: 'h2h', sel: '1', price: 1.6 }, { book: 'a', market: 'h2h', sel: '2', price: 2.3 }], false).why.length, 0);
+  // two prices for one pick (two markets mixed): dropped pre-match, not live (live prices move between reads)
+  const mixed = [{ book: 's', market: 'h2h', sel: '1', price: 2.86 }, { book: 's', market: 'h2h', sel: '1', price: 3.08 }, { book: 's', market: 'h2h', sel: '2', price: 1.41 }];
+  assert.strictEqual(dropIncoherent(mixed, false).odds.length, 0);
+  assert.strictEqual(dropIncoherent(mixed, false, true).odds.length, 3);
+  // totals: an over/under pair under 100 % at one book
+  assert.strictEqual(dropIncoherent([{ book: 'n', market: 'totals', point: 2.5, sel: 'O', price: 2.1 }, { book: 'n', market: 'totals', point: 2.5, sel: 'U', price: 2.05 }], true).odds.length, 0);
+  console.log('incoherent market tests passed');
+}

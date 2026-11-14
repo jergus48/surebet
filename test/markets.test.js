@@ -166,11 +166,26 @@ console.log('market tests passed');
   const { findSurebets, marketLabel } = require('../src/arb');
   const q = (book, market, sel, price) => ({ book, market, point: null, sel, price });
   const ev = { id: 'cx', sport: 'football', home: 'A', away: 'B', drawPossible: true, start: 1, odds: [
-    q('nike', 'h2h', '1', 2.2), q('nike', 'h2h', 'X', 4.0), q('nike', 'h2h', '2', 4.0), q('nike', 'h2h', 'X2', 1.9),
-    q('tipos', 'dnb', '1', 2.3), q('tipos', 'dnb', '2', 2.6), q('tipos', 'h2h', '1', 2.15), q('tipos', 'h2h', 'X', 3.2), q('tipos', 'h2h', '2', 3.4)] };
+    // realistic, consistent book markets (each over 100 %; away favoured at Tipos in 1X2 and in DNB alike)
+    q('nike', 'h2h', '1', 2.6), q('nike', 'h2h', 'X', 3.3), q('nike', 'h2h', '2', 2.7), q('nike', 'h2h', 'X2', 1.55),
+    q('tipos', 'dnb', '1', 2.9), q('tipos', 'dnb', '2', 1.4), q('tipos', 'h2h', '1', 3.6), q('tipos', 'h2h', 'X', 3.3), q('tipos', 'h2h', '2', 2.05)] };
   const sb = findSurebets([ev], { minProfitPct: 0, bankroll: 30 }).find(x => x.market === 'x_dnb1_X2');
-  assert.ok(sb, 'DNB 1 (2.30) vs X2 (1.90): 1/2.3 + 1/1.9 = 0.96 < 1');
+  assert.ok(sb, 'DNB 1 (2.90) vs X2 (1.55): 1/2.9 + 1/1.55 = 0.99 < 1');
   assert.deepStrictEqual(sb.legs.map(l => `${l.book} ${l.market} ${l.sel}`).sort(), ['nike h2h X2', 'tipos dnb 1']);
   assert.strictEqual(marketLabel(sb), 'Draw no bet 1 vs X2');
   console.log('cross-market tests passed');
+}
+
+// Chance basketball: the list row is the regular-time 1/1X/X/X2/2 market, never read as the winner incl. overtime
+{
+  const assert = require('assert');
+  const chance = require('../src/providers/browser/chance');
+  const m = (rows) => ({ offerSuperSports: [{ tabs: [{ offerCompetitionAnnuals: [{ name: 'NBA', matches: [{ participantHome: 'Cleveland', participantVisiting: 'Dallas', url: '/x/1', dateClosed: '2026-11-14T18:00:00Z', oppRows: rows }] }] }] }] });
+  const op = (type, odd) => ({ type, odd, bettingEnabled: true, id: type });
+  const threeWay = [{ oppsTab: [op('1', 2.24), op('1x', 1.97), op('x', 14), op('x2', 1.64), op('2', 1.83)] }];
+  assert.strictEqual(chance.parse(m(threeWay), 'basketball').length, 0);
+  const twoWay = [{ oppsTab: [op('1', 1.6), op('2', 2.3)] }];
+  assert.deepStrictEqual(chance.parse(m(twoWay), 'basketball')[0].odds.map(o => `${o.sel}@${o.price}`), ['1@1.6', '2@2.3']);
+  assert.strictEqual(chance.parse(m(threeWay), 'football')[0].odds.length, 5); // football keeps 1/X/2 and double chance
+  console.log('chance 3-way basketball tests passed');
 }

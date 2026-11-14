@@ -470,7 +470,10 @@ async function pickButton(page, site, leg) {
     if (!(await h.boundingBox())) continue;
     const price = texts.find(x => t === x || t.endsWith(' ' + x) || t.startsWith(x + ' '));
     if (!price) throw new Error(`${leg.book}: the button shows "${t}", not ${leg.price} (odds moved)`);
-    leg.pickText = norm(t.replace(price, '')) || label || null;
+    // What is left is the pick's label; a button that also shows its previous price (Chance: "16.00 17.60",
+    // 2026-11-14) leaves only numbers, which are no label.
+    const rest = norm(t.replace(price, ''));
+    leg.pickText = (rest && !/^[\d\s.,%+-]*$/.test(rest) ? rest : null) || label || null;
     return h;
   }
   throw new Error(`${leg.book}: the market button for this pick is not on the match page (${label || css})`);
@@ -1123,4 +1126,4 @@ async function withBook(book, fn) {
   try { return await fn(); } finally { busyBooks.delete(book); }
 }
 
-module.exports = { clearSlip, execute, wouldBet, busy, withBook, bookBusy: b => busyBooks.has(b), typeStake, betAllowed, liveStakes, worstPct, coverPlan, SLIP_BLOCK_RE, MARKET_UI, outcomeOf, wrongOutcome, unpick, prepareLeg, applyStakeCaps, stillProfitable, parseMoney, waitForDrop, placedStatus, stakeText, stakeMatches, checkSlip, sameMatch };
+module.exports = { placeLeg, clearSlip, execute, wouldBet, busy, withBook, bookBusy: b => busyBooks.has(b), typeStake, betAllowed, liveStakes, worstPct, coverPlan, SLIP_BLOCK_RE, MARKET_UI, outcomeOf, wrongOutcome, unpick, prepareLeg, applyStakeCaps, stillProfitable, parseMoney, waitForDrop, placedStatus, stakeText, stakeMatches, checkSlip, sameMatch };

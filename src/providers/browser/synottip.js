@@ -127,9 +127,12 @@ function marketOf(game) {
   return null;
 }
 
-function oddsOf(game, link, now) {
+// draw: does the sport have a draw? Without one (basketball), "Zápas" is the regular-time 1/0/2 market, not the
+// winner incl. overtime the other books quote: never taken as the match result.
+function oddsOf(game, link, now, draw = true) {
   const kind = marketOf(game);
   if (!kind) return [];
+  if (!draw && String(game.Name || '').trim().toLowerCase() === 'zápas') return [];
   const out = [];
   for (const d of game.Details || []) {
     if (d.Suspended || (d.State && d.State !== 2)) continue;
@@ -200,7 +203,7 @@ function parse(json, sportKey) {
     let odds = marketsOf(sportKey, t[0].trim(), t[1].trim(), games).map(o => ({ book: 'synottip', ...o, link, updated: now, ...(/^(home|away)_totals$/.test(o.market) ? { home: t[0].trim(), away: t[1].trim() } : {}) }));
     if (!odds.some(o => o.market === 'h2h')) {
       odds = [];
-      for (const gg of ev.GameGroups || []) for (const g of gg.Games || []) odds.push(...oddsOf(g, link, now));
+      for (const gg of ev.GameGroups || []) for (const g of gg.Games || []) odds.push(...oddsOf(g, link, now, !!require('./sports')[sportKey]?.draw));
     }
     if (!odds.length) continue;
     out.push({

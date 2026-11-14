@@ -78,6 +78,19 @@ function maybeRetry(s, sb) {
 
 const siblingsOf = (found, sb) => found.filter(x => x.eventId === sb.eventId && x.key !== sb.key);
 
+// A book's market that cannot be complete (adds up under 100 %, or two prices for one pick): logged once per
+// match and book market, its prices are left out of surebets (arb dropIncoherent).
+const incoherentSeen = new Set();
+function onIncoherent(ev, why) {
+  for (const w of why) {
+    const k = `${ev.id}|${w.split(':')[0]}`;
+    if (incoherentSeen.has(k)) continue;
+    incoherentSeen.add(k);
+    if (incoherentSeen.size > 20000) incoherentSeen.clear();
+    db.log('warn', `incoherent market left out: ${ev.home} - ${ev.away}: ${w}`);
+  }
+}
+
 async function pollOnce() {
   const s = config.load();
   const provider = providers.get(s.provider);
@@ -91,7 +104,7 @@ async function pollOnce() {
     const found = findSurebets(events, {
       minProfitPct: s.minProfitPct, maxProfitPct: s.maxProfitPct, books,
       bankroll: s.bankrollPerBet, step: s.roundStakeTo, stakeTiers: s.stakeTiers, includeLive: false,
-      maxAgeMs: (s.maxOddsAgeSec || 0) * 1000,
+      maxAgeMs: (s.maxOddsAgeSec || 0) * 1000, onIncoherent,
     });
     for (const sb of found) {
       if (db.upsertSurebet(sb)) reportNew(s, sb, siblingsOf(found, sb));
@@ -126,7 +139,7 @@ async function livePollOnce() {
       minProfitPct: s.liveMinProfitPct ?? s.minProfitPct,
       maxProfitPct: s.liveMaxProfitPct ?? 10,
       bankroll: s.bankrollPerBet, step: s.roundStakeTo, stakeTiers: s.stakeTiers, includeLive: true,
-      maxAgeMs: (s.liveMaxAgeSec || 20) * 1000, now,
+      maxAgeMs: (s.liveMaxAgeSec || 20) * 1000, now, onIncoherent,
     });
     const liveBooks = new Set(Object.entries(s.bookmakers).filter(([, b]) => b.enabled).map(([k]) => k));
     analytics.record(events, { live: true, books: liveBooks.size ? liveBooks : null, maxAgeMs: (s.liveMaxAgeSec || 20) * 1000, maxProfitPct: s.liveMaxProfitPct ?? 10, now });

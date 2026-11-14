@@ -74,6 +74,44 @@ const SMALL_STEP = 0.1, SMALL_MIN_LEG = 0.5;
 //  - flipped favourite: a book whose 2-way / 3-way favourite (lower of 1 and 2) is the other side
 //    from at least two other books that agree with each other: its 1/X/2 prices are dropped.
 const DC_PARTS = { '1X': ['1', 'X'], X2: ['X', '2'], '12': ['1', '2'] };
+// Incoherent markets (pure: -> { odds, why[] }). A bookmaker's own complete market always adds up to MORE than
+// 100 % (sum of 1/price over its outcomes; the rest is its margin). Under 100 % means an outcome is missing:
+// the prices are from another market than their label says. Chance's basketball "winner" was the regular-time
+// 1/X/2 without its X: 1/2.24 + 1/1.83 = 99.3 %, and Fenerbahçe - Efes was bet as a surebet that loses both
+// legs on a tie after regulation (2026-11-14). Also: one book quoting two clearly different prices for the
+// same pick in the same market (pre-match) is two markets mixed into one ("Zápas" 1 and "Víťaz" 1).
+// The book's prices in that market are dropped, whichever reader or market caused it.
+function dropIncoherent(odds, drawPossible, live = false) {
+  const by = new Map(); // book|market|point -> [odds]
+  for (const o of odds) {
+    const k = `${o.book}|${groupKey(o)}`;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(o);
+  }
+  const bad = new Set(), why = [];
+  for (const [k, list] of by) {
+    const best = new Map(), seen = new Map();
+    for (const o of list) {
+      if (!best.has(o.sel) || o.price > best.get(o.sel)) best.set(o.sel, o.price);
+      if (!seen.has(o.sel)) seen.set(o.sel, []);
+      seen.get(o.sel).push(o.price);
+    }
+    const [book, market] = k.split('|');
+    if (market.startsWith('x_')) continue;
+    let reason = null;
+    if (!live) for (const [sel, ps] of seen) if (Math.max(...ps) > Math.min(...ps) * 1.05) { reason = `${sel} quoted ${Math.min(...ps)} and ${Math.max(...ps)}`; break; }
+    if (!reason) {
+      for (const set of outcomeSets(market, new Set(best.keys()), drawPossible)) {
+        if (!set.every(x => best.has(x))) continue;
+        const sum = set.reduce((a, x) => a + 1 / best.get(x), 0);
+        if (sum < 1) { reason = `${set.map(x => `${x} ${best.get(x)}`).join(' / ')} adds up to ${Math.round(sum * 1000) / 10} %`; break; }
+      }
+    }
+    if (reason) { for (const o of list) bad.add(o); why.push(`${book} ${k.split('|').slice(1).join(' ').trim()}: ${reason}`); }
+  }
+  return { odds: bad.size ? odds.filter(o => !bad.has(o)) : odds, why };
+}
+
 function dropStale(odds) {
   const h2h = odds.filter(o => o.market === 'h2h');
   const at = (book, sel) => h2h.find(o => o.book === book && o.sel === sel);
@@ -182,7 +220,9 @@ function findSurebets(events, opts = {}) {
     if (!includeLive && ev.live) continue;
     const groups = new Map();
     const maxAge = maxAgeFor(ev, maxAgeMs, now);
-    for (const o of dropStale(ev.odds)) {
+    const coherent = dropIncoherent(ev.odds, ev.drawPossible, !!ev.live);
+    if (coherent.why.length && opts.onIncoherent) opts.onIncoherent(ev, coherent.why);
+    for (const o of dropStale(coherent.odds)) {
       if (books && !books.has(o.book)) continue;
       if (!(o.price > 1)) continue;
       if (maxAge && o.updated && now - o.updated > maxAge) continue; // stale price
@@ -285,4 +325,4 @@ function marketLabel(sb) {
   return sb.market;
 }
 
-module.exports = { FAR_START_MS, FAR_MAX_AGE_MS, maxAgeFor, sameNames, findSurebets, stakes, bestSplit, marketLabel, dropStale, flippedFavourite, SMALL_STEP, SMALL_MIN_LEG };
+module.exports = { dropIncoherent, FAR_START_MS, FAR_MAX_AGE_MS, maxAgeFor, sameNames, findSurebets, stakes, bestSplit, marketLabel, dropStale, flippedFavourite, SMALL_STEP, SMALL_MIN_LEG };
