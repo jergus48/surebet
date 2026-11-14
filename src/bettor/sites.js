@@ -27,6 +27,7 @@ const DEFAULTS = {
       placeButton: 'button[data-atid="btn-betTicket"]', // "Staviť x €"
       placedConfirm: null, // confirmed by the balance dropping instead
     },
+    slipRemove: '[data-atid="ticketBuilderRemoveOppButton"]', // the X on a slip line (also Chance)
   },
   // Calibrated 2026-11-12 on a logged-in bet365.com account (German site, €): filled a real slip
   // without placing. Page classes are scrambled per deploy, so only the readable bet-slip classes
@@ -41,6 +42,7 @@ const DEFAULTS = {
     search: null,
     slipError: '.bs-GeneralErrorMessage_Contents',
     balanceRequired: true,
+    passiveBalance: true, // balance read from its open tabs: reloading makes bet365 serve empty pages
     // In-Play pages (#/IP/B..) show prices in ovm- cells. Handicap and total cells use the same
     // class as the match winner but show their line ("+14.5", "Ü 187.5") next to the price:
     // a price whose cell holds a non-empty oddsLine is never the one clicked.
@@ -73,6 +75,7 @@ const TIPOS_SLIP = {
 // ("Nad (2.5) 1,76"). marketUI lets the bettor click other markets by name and label (bettor
 // MARKET_UI); betMarkets = the markets whose clicking was tested on the site (dry run, never placed).
 const TIPOS_MARKETS = {
+  slipRemove: '.remove-link', // the X on a slip line
   matchScope: '[data-test-role="event-detail"]', // the match's own odds (live pages also list other matches)
   marketUI: { tabs: '[data-test-role="game-group-tabs__item"]', game: '[data-test-role="event-game"]', button: '[data-test-role="rate"]' },
   // Tested 2026-11-13 on both sites (filled, never placed): totals, handicap, BTTS, draw no bet; 1st-half
@@ -95,6 +98,7 @@ Object.assign(DEFAULTS, {
       slipOdds: '[data-atid="te-pick-odds"]',
       placeButton: '[data-atid="te-submit-button"]', // "Staviť x €"
     },
+    slipRemove: '[data-atid="te-pick-close-button"]',
   },
   // Calibrated 2026-11-10 on a logged-in account: filled a real slip without placing. Place is
   // "STAVIŤ TIKET" (not "Uložiť tiket"); it may open a confirmation step, check the first real bet.
@@ -104,6 +108,7 @@ Object.assign(DEFAULTS, {
   doxxbet: {
     home: 'https://www.doxxbet.sk/sk', domain: /doxxbet\.sk/, search: null,
     closePopups: ['aside.modal--ticket.uk-open button.uk-modal-close'],
+    slipRemove: 'button.ticket__item__remove',
     selectors: {
       ...EMPTY, balance: '#client-balance', loggedIn: '#client-balance',
       oddsButton: 'span.rate',
@@ -118,7 +123,7 @@ Object.assign(DEFAULTS, {
   // "€ / G" switch (G = Goldeny bonus coins) that opens on G: euroToggle flips it to € first,
   // and the bot still refuses any slip whose Place button is not in €.
   chance: {
-    home: 'https://www.chance.sk/', domain: /chance\.sk/, search: null,
+    home: 'https://www.chance.sk/', domain: /chance\.sk/, search: null, slipRemove: DEFAULTS.tipsport.slipRemove,
     selectors: { ...DEFAULTS.tipsport.selectors, euroToggle: '[data-atid="ticketBuilderCurrency-EUR"]' },
   },
   olybet: { home: 'https://www.olybet.lt/', domain: /olybet\.lt/, search: null, selectors: { ...EMPTY } },

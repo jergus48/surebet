@@ -19,6 +19,8 @@ const inFlight = new Set();
 const activeEvents = new Set(); // matches with a bet attempt running
 const betEvents = new Set();    // matches where Place was clicked (placed, partial or unconfirmed)
 const busyBooks = new Set();    // books whose betting tab is in use
+const fillLeftAt = new Map();   // book -> when a fill ("Open") last left a pick on its slip for you to place
+const FILL_GRACE_MS = 3 * 60 * 1000;
 
 function priceTexts(p) {
   const a = p.toFixed(2), b = String(p);
@@ -93,17 +95,62 @@ async function keypadStake(page, box, text) {
   await sleep(500);
 }
 
-async function typeStake(page, sel, leg, { keypad = false } = {}) {
-  const box = await visible(page, sel);
-  if (!box) throw new Error(`${leg.book}: no visible stake box on the slip`);
+// Slips re-render for a moment after a pick (the selection loads, the default stake is filled in, the
+// box is swapped for a new one): keys typed in that moment are lost or land in front of the default.
+// Niké showed "4 €" for 14 and Tipos "1,006" for 16 (2026-11-14), and both surebets were missed. So:
+// wait until the box (same element, same text) is steady, type, read back, and when it does not show
+// exactly the stake, wait and type again (up to 3 times; the last time the value is set directly).
+// Nothing is placed unless the box shows exactly the stake.
+async function settleBox(page, sel, maxMs = 4000) {
+  let last, same = 0;
+  for (const t0 = Date.now(); Date.now() - t0 < maxMs; await sleep(250)) {
+    const v = await page.$$eval(sel, els => {
+      const e = els.find(x => x.getBoundingClientRect().width > 0);
+      if (!e) return null;
+      e.__sbId = e.__sbId || Math.random().toString(36).slice(2); // a replaced box gets a new id
+      return `${e.__sbId}|${e.value ?? e.innerText}`;
+    }).catch(() => null);
+    if (v != null && v === last) { if (++same >= 3) return; } else same = 0;
+    last = v;
+  }
+}
+async function typeStake(page, sel, leg, opts = {}) {
+  const amount = amountOf(leg);
+  let shown = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await settleBox(page, sel);
+    const box = await visible(page, sel);
+    if (!box) throw new Error(`${leg.book}: no visible stake box on the slip`);
+    await typeStakeOnce(page, box, leg, { ...opts, direct: attempt === 3 });
+    await sleep(500);
+    const now = (await visible(page, sel)) || box; // read the box on screen now (it may have been swapped)
+    shown = await now.evaluate(el => el.value ?? el.innerText).catch(() => null);
+    if (stakeMatches(shown, amount)) return;
+    db.log('warn', `${leg.book}: stake box shows "${shown}" after typing ${amount} (try ${attempt} of 3)`);
+    await sleep(1000);
+  }
+  throw new Error(`${leg.book}: stake box shows "${shown}", not ${amount}: not continuing`);
+}
+
+async function typeStakeOnce(page, box, leg, { keypad = false, direct = false } = {}) {
   const amount = amountOf(leg);
   if (keypad) {
     await keypadStake(page, box, String(amount)).catch(e => { throw new Error(`${leg.book}: ${e.message}`); });
-    const shown = await box.evaluate(el => el.innerText);
-    if (!stakeMatches(shown, amount)) throw new Error(`${leg.book}: stake box shows "${shown}", not ${amount}: not continuing`);
     return;
   }
   const current = await box.evaluate(el => el.value ?? el.innerText);
+  // Last try: set the input's value the way the page's own code would see a typed value.
+  if (direct) {
+    const ok = await box.evaluate((el, v) => {
+      if (!(el instanceof HTMLInputElement)) return false;
+      el.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }, stakeText(amount, current));
+    if (ok) return;
+  }
   await box.click();
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
   await page.keyboard.down(mod);
@@ -119,8 +166,6 @@ async function typeStake(page, sel, leg, { keypad = false } = {}) {
     for (let i = 0; i < 12 && (await left()); i++) { await page.keyboard.press('End'); await page.keyboard.press('Backspace'); }
   }
   await page.keyboard.type(stakeText(amount, current), { delay: 40 });
-  const shown = await box.evaluate(el => el.value ?? el.innerText);
-  if (!stakeMatches(shown, amount)) throw new Error(`${leg.book}: stake box shows "${shown}", not ${amount}: not continuing`);
 }
 
 // Stake box still shows exactly the stake and the Place button is in the site's currency (€, or
@@ -270,11 +315,26 @@ async function priceButton(page, site, leg, names) {
   await page.waitForSelector(S.oddsButton, { timeout: 15000 });
   // site.matchScope: the block that holds only this match's odds (Tipos / Synottip match pages also
   // list other live matches, and one of those once had the same price: the wrong match was clicked).
-  const scope = site.matchScope && (await page.$(site.matchScope)) ? site.matchScope + ' ' : '';
+  // The live page draws the other live matches first and this match's block a moment later: searching
+  // before the block is there searched the whole page and clicked 1.40 in Metallurg Vologda U21 for a
+  // Karaganda leg (2026-11-14, stopped by the slip check). So the block is awaited, never skipped.
+  if (site.matchScope && !(await page.waitForSelector(site.matchScope, { visible: true, timeout: 10000 }).catch(() => null))) {
+    throw new Error(`${leg.book}: this match's odds block did not appear on the page (match over or page not loaded)`);
+  }
+  const scope = site.matchScope ? site.matchScope + ' ' : '';
   const texts = priceTexts(leg.price);
   const found = [];
   const offScreen = []; // matching price, but scrolled away in a carousel
   const onScreen = h => h.evaluate(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; });
+  // Match pages draw their markets in steps (Niké: the 1X2 row first, double chance a moment later):
+  // the first odds button on screen does not mean the price is there yet. Look again for up to 8 s
+  // (Niké 1X @ 2.25 was "not found" on every other try, 2026-11-14).
+  for (const t0 = Date.now(); ; await sleep(700)) {
+    found.length = 0; offScreen.length = 0;
+    await collectPrices();
+    if (found.length || offScreen.length || Date.now() - t0 > 8000) break;
+  }
+  async function collectPrices() {
   for (const h of await page.$$(S.oddsButton.split(',').map(x => scope + x.trim()).join(', '))) {
     const t = (await h.evaluate(el => el.innerText || '')).trim();
     // The price ends the button's text ("1\n1.59"), not just its digits: "2\n11.59" is not 1.59.
@@ -286,6 +346,7 @@ async function priceButton(page, site, leg, names) {
     // Carousels keep slides (and clones) far left/right of the page (Megawin's featured matches).
     if (!(await onScreen(h))) { offScreen.push(h); continue; }
     found.push(h);
+  }
   }
   // scrollCarousel: a slide that is scrolled away is brought into view, but only one whose row
   // names this match.
@@ -453,9 +514,23 @@ async function clickOdds(page, site, leg, names, sb) {
   return target;
 }
 
-// Take a pick back off the slip by clicking its odds button again (sites toggle a picked price).
-// Returns true when the slip is empty afterwards; logs when it is not, so it can be cleared by hand.
-async function unpick(page, S, target, book) {
+// Empties the slip with its own remove buttons (site.slipRemove, the X on each slip line).
+// -> true when the slip is empty afterwards.
+async function clearSlip(page, S, site) {
+  if (!site || !site.slipRemove || !S.slipOdds) return false;
+  for (let i = 0; i < 6 && (await slipPrices(page, S.slipOdds)).length; i++) {
+    const x = await visible(page, site.slipRemove);
+    if (!x) break;
+    await x.evaluate(el => (el.closest('button, a, [role=button]') || el).dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await sleep(1200);
+  }
+  return !(await slipPrices(page, S.slipOdds)).length;
+}
+
+// Take a pick back off the slip by clicking its odds button again (sites toggle a picked price), else
+// with the slip's own remove button. Returns true when the slip is empty afterwards; logs when it is
+// not, so it can be cleared by hand.
+async function unpick(page, S, target, book, site = sites.load()[book]) {
   try {
     if (!S.slipOdds || !(await slipPrices(page, S.slipOdds)).length) return true;
     if (target && (await target.boundingBox())) {
@@ -463,13 +538,14 @@ async function unpick(page, S, target, book) {
       await sleep(1500);
       if (!(await slipPrices(page, S.slipOdds)).length) return true;
     }
+    if (await clearSlip(page, S, site)) return true;
   } catch { }
   db.log('warn', `${book}: could not clear the bet slip, clear it by hand in that window`);
   return false;
 }
 
 // Prepare one leg up to (not including) the Place click.
-async function prepareLeg(settings, sb, leg) {
+async function prepareLeg(settings, sb, leg, opts = {}) {
   // Cross-market surebet: each leg has its own market (DNB, double chance, OT winner).
   if (leg.market) sb = { ...sb, market: leg.market, point: leg.point ?? null };
   const bk = settings.bookmakers[leg.book];
@@ -507,9 +583,18 @@ async function prepareLeg(settings, sb, leg) {
     }
   }
 
-  // A leftover selection would be bet together with this leg: the slip must start empty.
+  // A leftover selection would be bet together with this leg: the slip must start empty. An auto bet
+  // removes a leftover with the slip's own X (an "Open" / fill left Myjava 1.85 on DOXXbet's slip and every
+  // later bet there stopped, 2026-11-14), except within FILL_GRACE_MS of a fill there: you may be placing it.
   if (S.slipOdds && (await slipPrices(page, S.slipOdds)).length) {
-    throw new Error(`${leg.book}: the bet slip already holds a selection, clear it in that window first`);
+    const filled = fillLeftAt.get(leg.book);
+    if (opts.mode !== 'auto' || (filled && Date.now() - filled < FILL_GRACE_MS)) {
+      throw new Error(`${leg.book}: the bet slip already holds a selection${filled && Date.now() - filled < FILL_GRACE_MS ? ' (filled by Open a moment ago)' : ''}, clear it in that window first`);
+    }
+    const left = await page.$$eval(S.slipOdds, els => els.filter(e => e.getBoundingClientRect().width > 0).map(e => { let n = e; for (let i = 0; i < 5 && n.parentElement && (n.innerText || '').length < 50; i++) n = n.parentElement; return n.innerText.replace(/\s+/g, ' ').slice(0, 80); }).join(' | ')).catch(() => '');
+    if (!(await clearSlip(page, S, site))) throw new Error(`${leg.book}: the bet slip already holds a selection ("${left}") and it could not be removed: clear it in that window`);
+    db.log('warn', `${leg.book}: removed a leftover pick from the slip before betting ("${left}")`);
+    fillLeftAt.delete(leg.book);
   }
 
   // From the first click on, a leg that stops must not leave its pick on the slip: the next
@@ -681,6 +766,16 @@ function autoAllowed(settings, sb) {
   return null;
 }
 
+// Would execute() go ahead with this surebet in auto mode right now? (null = yes, else why not.) Same
+// checks as execute: limits, live stake, stake caps from the live balances.
+function wouldBet(settings, sb) {
+  const why = autoAllowed(settings, sb);
+  if (why) return why;
+  const small = liveStakes(settings, sb);
+  const capped = small.error ? small : applyStakeCaps(settings, small.sb);
+  return capped.error || null;
+}
+
 // Live auto bets use their own, smaller total: at most autoLiveMaxStakeTotal (default 2) per surebet,
 // in 0.10 steps (0.50 min a leg), so a few euros prove the live path before it gets more money (best split, see arb).
 function liveStakes(settings, sb) {
@@ -761,6 +856,9 @@ const legLine = p => `${p.leg.book}: ${p.leg.sel} @ ${p.leg.slipPrice || p.leg.p
 
 async function execute(settings, sb, { mode = settings.betMode, manual = false } = {}) {
   if (mode === 'off') return { status: 'skipped', detail: 'betMode off' };
+  // Two legs at one book are one ticket on one slip and fight over one tab (Open on Komárno B - Myjava with
+  // Tipos 1 + Tipos X aborted its own page, 2026-11-14): refused in every mode, not only auto.
+  if (new Set(sb.legs.map(l => l.book)).size < sb.legs.length) return { status: 'skipped', detail: 'two legs at the same bookmaker (one ticket, not separate bets): not opened' };
   if (inFlight.has(sb.key)) return { status: 'skipped', detail: 'already running' };
   if (mode === 'auto' && !manual) {
     let why = autoAllowed(settings, sb);
@@ -795,9 +893,22 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
   const title = `${sb.home} - ${sb.away} (${marketLabel(sb)}, +${sb.profitPct}%)`;
   try {
     // Every leg in its own book's window, in parallel.
-    const results = await Promise.allSettled(sb.legs.map(l => prepareLeg(settings, sb, { ...l })));
+    const results = await Promise.allSettled(sb.legs.map(l => prepareLeg(settings, sb, { ...l }, { mode })));
     const ok = results.filter(r => r.status === 'fulfilled').map(r => r.value);
-    const errs = results.filter(r => r.status === 'rejected').map(r => r.reason.message);
+    // Every error names its book ("Waiting for selector `span.tip-rate` failed" did not say which one).
+    const errs = results.map((r, i) => {
+      if (r.status !== 'rejected') return null;
+      const book = sb.legs[i].book, msg = String(r.reason && r.reason.message || r.reason);
+      return msg.startsWith(`${book}:`) ? msg : `${book}: ${msg}`;
+    }).filter(Boolean);
+    for (const [i, r] of results.entries()) {
+      if (r.status !== 'rejected') continue;
+      const book = sb.legs[i].book, msg = String(r.reason && r.reason.message || '');
+      // A leg that found the book logged out: Telegram is told now (the login check repeats hourly).
+      if (/not logged in|log in in its Chrome|logged out/i.test(msg)) balances.noteLogin(settings, book, false);
+      // A betting tab that stopped answering is closed; the next bet opens a fresh one.
+      if (chrome.isTimeout(r.reason)) await chrome.dropBetPage(settings.bookmakers[book].port).catch(() => { });
+    }
     const notes = ok.map(p => `${p.leg.book}: ${p.note}`).concat(errs.map(e => `ERR ${e}`)).join(' | ');
 
     // An auto attempt that stops after filling takes every pick back off its slip; whatever cannot
@@ -813,9 +924,11 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
     const allReady = errs.length === 0 && ok.every(p => p.ready);
     if (!allReady) {
       const status = errs.length ? 'failed' : 'filled';
+      if (mode !== 'auto') for (const p of ok) fillLeftAt.set(p.leg.book, Date.now()); // picks left on those slips
       db.setBet(betId, status, notes);
       db.log(errs.length ? 'warn' : 'info', `[${mode}] ${title}: ${notes}`);
       if (!quiet) notify.send(settings, `${status === 'filled' ? 'Ready, confirm in the windows' : 'Could not prepare'}: ${title}\n${notes}`).catch(() => { });
+      else if (mode === 'auto' && errs.length) missedAlert(settings, sb, ev, title, errs);
       await clearAll();
       return { status, detail: notes };
     }
@@ -836,6 +949,7 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
       return { status: 'failed', detail };
     }
     if (mode !== 'auto') {
+      for (const p of ok) fillLeftAt.set(p.leg.book, Date.now());
       db.setBet(betId, 'filled', `rechecked ${chk.pct}% | ${notes}`);
       db.log('info', `[${mode}] ${title}: rechecked ${chk.pct}% | ${notes}`);
       notify.send(settings, `Ready to place, rechecked +${chk.pct}%: ${title}\n${legs}\nCheck each slip and click Place in every window.`).catch(() => { });
@@ -934,9 +1048,24 @@ async function execute(settings, sb, { mode = settings.betMode, manual = false }
     for (const b of books) {
       const port = settings.bookmakers[b] && settings.bookmakers[b].port;
       if (port) await chrome.betPage(port).then(pg => pg.goto('about:blank')).catch(() => { });
+      const site = sites.load()[b];
+      if (port && site) await chrome.showSite(port, site.domain).catch(() => { });
     }
     books.forEach(b => busyBooks.delete(b));
   }
+}
+
+// An auto bet that stopped on the bot's side (logged out, stake box, page timeout), not because the
+// odds moved: with alertsOnlyBets Telegram heard nothing and the surebet was only on the dashboard
+// (Sint Maarten - Französisch-Guyana, 2026-11-14, placed by hand). Once per match, with the legs and links.
+const missedSent = new Set();
+const ODDS_MOVED_RE = /not found on page|below scanned|odds moved|a different selection|profit now/i;
+function missedAlert(settings, sb, ev, title, errs) {
+  const why = errs.filter(e => !ODDS_MOVED_RE.test(e));
+  if (!why.length || missedSent.has(ev)) return;
+  missedSent.add(ev);
+  const legs = sb.legs.map(l => `${notify.bookName(l.book)}: ${notify.selLabel(sb, l)} @ ${l.price}, stake ${l.stake} €${l.link ? ` ${l.link}` : ''}`).join('\n');
+  notify.send(settings, `❗ Surebet NOT bet automatically: ${title}\n${legs}\nWhy: ${why.join(' | ')}\nPlace it by hand if it is still there; the bot retries in 5 min.`).catch(() => { });
 }
 
 // Once a leg is placed, the rest are placed even at a small loss: an open position is far worse than a
@@ -985,4 +1114,13 @@ function placedStatus(legs) {
 
 const busy = () => inFlight.size > 0;
 
-module.exports = { execute, busy, betAllowed, liveStakes, worstPct, coverPlan, SLIP_BLOCK_RE, MARKET_UI, outcomeOf, wrongOutcome, unpick, prepareLeg, applyStakeCaps, stillProfitable, parseMoney, waitForDrop, placedStatus, stakeText, stakeMatches, checkSlip, sameMatch };
+// Runs fn with this book's betting tab reserved (balance / login checks), so a bet never shares the
+// tab with it: a bet arriving meanwhile waits (execute waits up to 90 s). Returns undefined without
+// running fn when a bet is using the book right now.
+async function withBook(book, fn) {
+  if (busyBooks.has(book)) return undefined;
+  busyBooks.add(book);
+  try { return await fn(); } finally { busyBooks.delete(book); }
+}
+
+module.exports = { clearSlip, execute, wouldBet, busy, withBook, bookBusy: b => busyBooks.has(b), typeStake, betAllowed, liveStakes, worstPct, coverPlan, SLIP_BLOCK_RE, MARKET_UI, outcomeOf, wrongOutcome, unpick, prepareLeg, applyStakeCaps, stillProfitable, parseMoney, waitForDrop, placedStatus, stakeText, stakeMatches, checkSlip, sameMatch };

@@ -132,6 +132,9 @@ async function bookPage(port, domainRe) {
 // puppeteer cannot even attach to it). Through the window's plain HTTP debug endpoints, which
 // still work, open a fresh tab on the same address and close the frozen one. Cookies live in
 // the profile, so the login stays. The betting tab is never replaced. At most once per 10 min.
+// The frozen tab is not always the scan tab: one hung extra tab (a ticket page) makes every
+// browser.pages() call time out ("Network.enable timed out"), and Tipos read nothing for 9 hours
+// while only the scan tab was swapped (2026-11-14). So every other tab of the window is closed too.
 const lastReplace = new Map();
 async function replaceFrozenTab(port, domainRe) {
   if (Date.now() - (lastReplace.get(port) || 0) < 10 * 60 * 1000) return false;
@@ -139,11 +142,42 @@ async function replaceFrozenTab(port, domainRe) {
   const base = `http://127.0.0.1:${port}/json`;
   const list = await (await fetch(`${base}/list`, { signal: AbortSignal.timeout(5000) })).json();
   const betIds = new Set([...betTabs.entries()].filter(([p, pg]) => p === port && !pg.isClosed()).map(([, pg]) => pg.target()._targetId));
-  const old = list.find(t => t.type === 'page' && domainRe.test(t.url) && !betIds.has(t.id));
+  const pages = list.filter(t => t.type === 'page' && !betIds.has(t.id));
+  const old = pages.find(t => domainRe.test(t.url));
   if (!old) return false;
   await fetch(`${base}/new?${old.url}`, { method: 'PUT', signal: AbortSignal.timeout(5000) });
-  await fetch(`${base}/close/${old.id}`, { signal: AbortSignal.timeout(5000) });
+  for (const t of pages) await fetch(`${base}/close/${t.id}`, { signal: AbortSignal.timeout(5000) }).catch(() => { });
   return old.url;
+}
+
+// A betting tab that timed out is closed (plain HTTP, it may not answer CDP) and opened anew next time.
+async function dropBetPage(port) {
+  const p = betTabs.get(port);
+  betTabs.delete(port);
+  if (!p) return;
+  const id = p.target()._targetId;
+  await fetch(`http://127.0.0.1:${port}/json/close/${id}`, { signal: AbortSignal.timeout(5000) }).catch(() => { });
+}
+
+// Last resort for a window that stays frozen: quit that bookmaker's Chrome (only the processes of its
+// own profile) and open it again on the site. The profile keeps its cookies; if the site still asks
+// to log in, the login check reports it.
+async function restart(port, bookKey, openUrl) {
+  const { execFileSync } = require('child_process');
+  const prof = profileDir(bookKey);
+  let pids = [];
+  try {
+    pids = String(execFileSync('ps', ['-axo', 'pid=,command='])).split('\n')
+      .filter(l => (l.includes(`--user-data-dir=${prof} `) || l.endsWith(`--user-data-dir=${prof}`)) && !l.includes('--type=')).map(l => Number(l.trim().split(/\s+/)[0])).filter(Boolean);
+  } catch { }
+  browsers.get(port)?.disconnect();
+  browsers.delete(port);
+  betTabs.delete(port);
+  for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch { } }
+  for (let i = 0; i < 30 && (await isUp(port)); i++) await new Promise(r => setTimeout(r, 500));
+  for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { } }
+  await new Promise(r => setTimeout(r, 1500));
+  return launch(port, bookKey, openUrl);
 }
 const isTimeout = e => /timed out/i.test(e && e.message || '');
 
@@ -159,6 +193,15 @@ async function betPage(port) {
   return page;
 }
 
-const isBetPage = page => [...betTabs.values()].includes(page);
+// Same tab even through another Page object for it (after a reconnect puppeteer hands out new ones).
+const isBetPage = page => [...betTabs.values()].some(b => b === page || (!b.isClosed() && b.target()._targetId === page.target()._targetId));
 
-module.exports = { findChromeExe, launch, launchCommand, launchArgs, isUp, connect, bookPage, betPage, isBetPage, profileDir, replaceFrozenTab, isTimeout };
+// After the betting tab is done (blank again), the window shows the site tab, not the blank page.
+// Never opens a tab; does nothing when the window has no other tab on the site.
+async function showSite(port, domainRe) {
+  const browser = await connect(port);
+  const p = (await browser.pages()).find(x => domainRe.test(x.url()) && !isBetPage(x));
+  if (p) await p.bringToFront();
+}
+
+module.exports = { findChromeExe, launch, launchCommand, launchArgs, isUp, connect, bookPage, betPage, dropBetPage, isBetPage, showSite, profileDir, replaceFrozenTab, restart, isTimeout };

@@ -43,10 +43,13 @@ function reportNew(s, sb, siblings = []) {
 // Same surebet still there, profit moved by >= 0.5 points: send an update.
 function maybeUpdate(s, sb, siblings = []) {
   const prev = lastAlert.get(sb.key);
-  // A surebet first seen under the minimum that has risen above it (live TPS Turku - Jokerit 3.69 % ->
-  // 4.9 %, 2026-11-13) gets its bet now, when the match has no attempt yet.
-  if (s.betMode === 'auto' && prev != null && prev < sb.profitPct && !bettor.betAllowed(s, sb) && !db.eventBets(sb.eventId || sb.key.split('|')[0]).n) {
-    db.log('info', `now above the minimum: ${sb.home}-${sb.away} ${prev}% -> ${sb.profitPct}%`);
+  // A surebet that was skipped and can be bet now gets its bet, when the match has no attempt yet: its profit
+  // rose above the minimum (live TPS Turku - Jokerit 3.69 % -> 4.9 %, 2026-11-13), or what stopped it is
+  // gone (Komárno B - Myjava +4.85 %, 2026-11-14: Tipos had 0.25 EUR, then a win and a top-up came in), or
+  // a setting changed. Checked every scan; only a surebet that would really be bet starts an attempt.
+  // (also right after a restart, when the surebet is in the history but not yet in lastAlert)
+  if (s.betMode === 'auto' && !bettor.betAllowed(s, sb) && !db.eventBets(sb.eventId || sb.key.split('|')[0]).n && !bettor.wouldBet(s, sb)) {
+    db.log('info', `can be bet now: ${sb.home}-${sb.away} +${sb.profitPct}%${prev != null && prev < sb.profitPct ? ` (was ${prev}%)` : ''}`);
     lastAlert.set(sb.key, sb.profitPct);
     bettor.execute(s, sb).catch(e => db.log('error', `bettor: ${e.message}`));
     return;

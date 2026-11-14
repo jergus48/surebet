@@ -77,14 +77,14 @@ function parseDetail(json, book, link, now = Date.now()) {
 // the same ids and the same prices as Tipsport: its extra markets are Tipsport's details, re-labelled.
 const queues = {};
 function mirror(fromBook, toBook) {
-  return async (settings, links) => {
+  return async (settings, links, starts = new Map()) => {
     const q = queues[fromBook];
     const out = new Map();
     if (!q) return out;
     for (const link of links) {
       const id = (/\/(\d+)(?:[/?#]|$)/.exec(link) || [])[1];
       const c = id && q.cache.get(id);
-      if (c && Date.now() - c.at < 170000) out.set(link, c.odds.map(o => ({ ...o, book: toBook, link })));
+      if (c && Date.now() - c.at < require('./detailQueue').ttlFor(starts.get(link), 170000)) out.set(link, c.odds.map(o => ({ ...o, book: toBook, link })));
     }
     return out;
   };

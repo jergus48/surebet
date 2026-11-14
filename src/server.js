@@ -16,6 +16,7 @@ const analytics = require('./analytics');
 const compare = require('./compare');
 const balances = require('./bettor/balances');
 const calibration = require('./bettor/calibration');
+const logins = require('./bettor/logins');
 const money = require('./money');
 const { marketLabel } = require('./arb');
 
@@ -86,7 +87,12 @@ function overview(s) {
     const minPay = payouts.length ? Math.min(...payouts) : 0;
     const row = { id: b.id, created: b.created, status: b.status, detail: b.detail, ...L, legs: L.legs, staked, minPayout: r2(minPay), locked: r2(minPay - staked) };
     // Waiting while the match can still be running (start + 3 h); after that the payout should be in the balance.
-    (L.start && Date.now() < L.start + 3 * 3600e3 ? open : done).push(row);
+    // Earlier when a leg was already paid out: its book's balance rose by exactly that leg's payout after kick-off.
+    // The payout is then in the balance, and counting it again as an open payout doubled it (Šaľa - Nové Zámky:
+    // Tipos paid 32.11 at 14:50 and the overview showed 56 EUR expected instead of 24, 2026-11-14).
+    const paid = L.start && Date.now() >= L.start && legs.find(l => paidOut(l.book, r2(l.stake * l.price), L.start));
+    if (paid) row.paidAt = paid.book;
+    (L.start && Date.now() < L.start + 3 * 3600e3 && !paid ? open : done).push(row);
   }
   const known = books.filter(b => b.now != null);
   const sum = k => r2(known.reduce((a, b) => a + (b[k] || 0), 0));
@@ -98,6 +104,13 @@ function overview(s) {
       change: r2(known.reduce((a, b) => a + (b.change || 0), 0)), openStake, openPayout, openLocked: r2(openPayout - openStake),
       expected: r2(known.reduce((a, b) => a + (b.change || 0), 0) + openPayout), missing: books.filter(b => b.now == null).map(b => b.book), stale },
   };
+}
+
+// Did this book's balance rise by `amount` (one reading to the next, within 2 cents) after `since`?
+function paidOut(book, amount, since) {
+  const rows = db.db.prepare('SELECT amount FROM balances WHERE book = ? AND ts >= (SELECT COALESCE(MAX(ts), 0) FROM balances WHERE book = ? AND ts < ?) ORDER BY ts').all(book, book, since);
+  for (let i = 1; i < rows.length; i++) if (Math.abs(rows[i].amount - rows[i - 1].amount - amount) <= 0.02) return true;
+  return false;
 }
 
 function decorate(row) {
@@ -182,6 +195,29 @@ async function api(req, res, url) {
     } catch (e) { return send(res, 400, { error: e.message }); }
   }
   if (p === '/api/overview') return send(res, 200, overview(s));
+  // Auto login: who is saved per book (never a password back). Saving / removing only from this Mac
+  // (a password typed on a phone would cross the Wi-Fi unencrypted).
+  if (p === '/api/logins' && req.method === 'GET') {
+    const books = Object.entries(s.bookmakers).filter(([, b]) => b.enabled && !b.dataOnly).map(([k]) => k);
+    return send(res, 200, { local: isLocal(req), books: await logins.status(books) });
+  }
+  if (p.startsWith('/api/logins/') && req.method === 'POST') {
+    const body = await readBody(req);
+    if (!s.bookmakers[body.book]) return send(res, 400, { error: 'unknown bookmaker' });
+    try {
+      if (p === '/api/logins/save' || p === '/api/logins/delete') {
+        if (!isLocal(req)) return send(res, 403, { error: 'logins can only be changed on the Mac itself (http://localhost:8080)' });
+        if (p === '/api/logins/save') await logins.set(body.book, String(body.username || '').trim(), String(body.password || ''));
+        else await logins.remove(body.book);
+        return send(res, 200, { ok: true });
+      }
+      // Log in now (also the test of a saved login): does nothing when the window is already logged in.
+      if (p === '/api/logins/test') {
+        const r = await logins.auto(s, body.book);
+        return send(res, 200, { result: r, last: (await logins.status([body.book]))[body.book].last });
+      }
+    } catch (e) { return send(res, 400, { error: e.message }); }
+  }
   if (p === '/api/money' && req.method === 'GET') {
     const entries = db.ledger();
     const latest = Object.fromEntries(Object.entries(balances.snapshot()).filter(([, v]) => v.amount != null).map(([k, v]) => [k, v.amount]));

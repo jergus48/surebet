@@ -65,6 +65,8 @@ async function trimTabs(s) {
   const routes = new Set(Object.values({ ...b365.SPORTS, ...(s.bet365Routes || {}) }).flat());
   for (const [book, bk] of Object.entries(s.bookmakers)) {
     if (!bk.enabled || !bk.port) continue;
+    // a login or balance check is using this window's betting tab right now: leave it alone
+    if (require('./bettor').bookBusy(book)) continue;
     try {
       const browser = await chrome.connect(bk.port);
       const pages = (await browser.pages()).filter(p => /^https?:/.test(p.url()) || /^about:blank/.test(p.url()));

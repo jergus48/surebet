@@ -8,6 +8,7 @@ const srv = http.createServer((req, res) => {
   if (req.url === '/json/list') return res.end(JSON.stringify([
     { id: 'X1', type: 'iframe', url: 'https://cdn.example/x' },
     { id: 'P1', type: 'page', url: 'https://sport.book.sk/sk/top' },
+    { id: 'P2', type: 'page', url: 'https://sport.book.sk/moj-tiket/1' }, // the hung extra tab
   ]));
   res.end('{}');
 });
@@ -17,7 +18,7 @@ srv.listen(0, '127.0.0.1', async () => {
     assert.ok(chrome.isTimeout(new Error('Runtime.callFunctionOn timed out. Increase the protocolTimeout')));
     assert.ok(!chrome.isTimeout(new Error('HTTP 500')));
     assert.strictEqual(await chrome.replaceFrozenTab(port, /book\.sk/), 'https://sport.book.sk/sk/top');
-    assert.deepStrictEqual(calls, ['GET /json/list', 'PUT /json/new?https://sport.book.sk/sk/top', 'GET /json/close/P1']);
+    assert.deepStrictEqual(calls, ['GET /json/list', 'PUT /json/new?https://sport.book.sk/sk/top', 'GET /json/close/P1', 'GET /json/close/P2']);
     assert.strictEqual(await chrome.replaceFrozenTab(port, /book\.sk/), false); // 10 min cooldown
     console.log('frozen tab tests passed');
   } catch (e) { console.error(e); process.exitCode = 1; } finally { srv.close(); }

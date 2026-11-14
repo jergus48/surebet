@@ -71,6 +71,37 @@ async function recoverFrozen(k, s, e) {
   }
 }
 
+// Reader watch: a book that reads nothing is reported on Telegram after DOWN_ALERT_MS (again every
+// hour, and when it reads again). Tipos read nothing for 9 hours on 2026-11-14 with only a log line.
+// A window that keeps timing out (frozen) past DOWN_RESTART_MS is restarted, once per outage.
+const down = {}; // book -> { since, error, alertedAt, restarted }
+const DOWN_ALERT_MS = 10 * 60e3, DOWN_RESTART_MS = 20 * 60e3, DOWN_REPEAT_MS = 3600e3;
+async function trackHealth(s, k, ok, error, now = Date.now()) {
+  const notify = require('../../notify');
+  const name = (s.bookmakers[k] && s.bookmakers[k].name) || k;
+  const d = down[k];
+  if (ok) {
+    if (d && d.alertedAt) notify.send(s, `✅ ${name}: odds are read again (was down ${Math.round((now - d.since) / 60000)} min).`).catch(() => { });
+    delete down[k];
+    return;
+  }
+  if (!d) { down[k] = { since: now, error, alertedAt: 0, restarted: false }; return; }
+  d.error = error;
+  if (now - d.since >= DOWN_RESTART_MS && !d.restarted && chrome.isTimeout({ message: error }) && !require('../../bettor').busy()) {
+    d.restarted = true;
+    const site = sites.load()[k];
+    db.log('warn', `${k}: window frozen for ${Math.round((now - d.since) / 60000)} min, restarting it`);
+    try {
+      await chrome.restart(s.bookmakers[k].port, k, site && site.home);
+      notify.send(s, `🔄 ${name}: its Chrome window was frozen, the bot restarted it. If it asks you to log in, log in there.`).catch(() => { });
+    } catch (e) { db.log('warn', `${k}: restart failed: ${e.message}`); }
+  }
+  if (now - d.since >= DOWN_ALERT_MS && now - d.alertedAt >= DOWN_REPEAT_MS) {
+    d.alertedAt = now;
+    notify.send(s, `⚠️ ${name}: no odds read for ${Math.round((now - d.since) / 60000)} min, so no surebets with ${name} are found or bet. Last error: ${String(error || '').slice(0, 200)}`).catch(() => { });
+  }
+}
+
 // Returns { [bookKey]: events[] } for every enabled book, plus per-book stats.
 async function collectAll(s, sportKeys) {
   const enabled = Object.entries(s.bookmakers).filter(([, b]) => b.enabled);
@@ -107,6 +138,7 @@ async function collectAll(s, sportKeys) {
     } else {
       perBook[k] = x.ok ? cleanForSport(x.r) : [];
       stats[k] = { source: 'browser', ok: x.ok, ms: x.ms, events: perBook[k].length, error: x.error, cached: !!x.cached };
+      await trackHealth(s, k, x.ok && perBook[k].length > 0, x.error || 'no matches read').catch(e => db.log('warn', `health ${k}: ${e.message}`));
     }
   }
   return perBook;
@@ -131,7 +163,8 @@ async function addDetails(s, merged) {
     if (!links.length) continue;
     try {
       const t0 = Date.now();
-      const got = await mod.details(s, links); // fresh cached details; a background queue fetches the rest
+      const starts = new Map(want.map(e => [linkOf(e), e.start]));
+      const got = await mod.details(s, links, starts); // fresh cached details; a background queue fetches the rest
       let n = 0;
       for (const e of want) {
         const extra = got.get(linkOf(e));
@@ -194,6 +227,7 @@ module.exports = {
   fetchLive,
   getLiveStats: () => liveStats,
   collectAll,
+  trackHealth,
   scanSports,
   listSports: async () => Object.entries(SPORTS).map(([key, v]) => ({ key, group: v.name, title: v.name, active: true })),
   estimateCreditsPerHour: () => 0,

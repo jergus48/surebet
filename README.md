@@ -56,6 +56,17 @@ Megawin MK, Bet365), so there is no calibrating to do. Once:
    the slips in the windows; check each and click Place yourself. Switch to **auto** only after a
    few fill bets went through cleanly (and check each book's bet history after the first ones).
 
+Watchdogs (Telegram, never muted by "alerts only bets"):
+- **Logged out**: every `balanceEverySec` each book's home page is loaded fresh in its betting tab
+  (never while a bet uses it) and the balance read there; no account shown = logged out. Told at
+  once, every hour until you log in, and when you are back. A bet that stops on a logged-out book
+  reports it too. Long-open scan tabs are not trusted: they keep an old header (and balance) for hours.
+- **Odds not read**: a book that reads no matches for 10 min is reported (hourly, and when it
+  recovers). A frozen window has all its tabs except the betting tab closed; still frozen after
+  20 min, that bookmaker's Chrome is restarted.
+- **Surebet not bet**: an auto bet that stopped on the bot's side (logged out, stake box, page
+  timeout; not odds moving) is sent with its legs and links, once per match, so you can place it by hand.
+
 Log: `tail -f data/bot.log`. Restart: `launchctl kickstart -k gui/$(id -u)/com.surebet.bot`.
 Remove: `bash scripts/mac/uninstall.sh`. The bookmaker Chrome windows open on the Mac's
 screen (one per bookmaker); leave them open. Logins are only needed for placing bets.

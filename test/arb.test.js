@@ -107,3 +107,41 @@ console.log('arb tests passed');
   assert.deepStrictEqual(bestSplit([2.1, 2.1], 100, 1).stakes, [50, 50]);
   console.log('small-stake split tests passed');
 }
+
+// flipped favourite: never bet, except live with the very same names at every book (a lagging live line)
+{
+  const assert = require('assert');
+  const { findSurebets } = require('../src/arb');
+  const mk = (live, n2) => ({ id: 't', sport: 'tabletennis', home: 'Filbrandt Tomasz', away: 'Chrzescian Radoslaw', start: 1, live, drawPossible: false,
+    names: { tipsport: 'Filbrandt Tomasz - Chrzescian Radoslaw (TT Elite Series)', doxxbet: n2 },
+    odds: [{ book: 'tipsport', market: 'h2h', sel: '1', price: 2.15 }, { book: 'tipsport', market: 'h2h', sel: '2', price: 1.6 },
+      { book: 'doxxbet', market: 'h2h', sel: '1', price: 1.55 }, { book: 'doxxbet', market: 'h2h', sel: '2', price: 2.25 }] });
+  const fl = ev => findSurebets([ev], { minProfitPct: 1, maxProfitPct: 20, bankroll: 30, step: 1, includeLive: true })[0].flipped;
+  assert.strictEqual(fl(mk(true, 'Filbrandt Tomasz - Chrzescian Radoslaw (Elite Series)')), false);
+  assert.strictEqual(fl(mk(false, 'Filbrandt Tomasz - Chrzescian Radoslaw')), true); // pre-match: still never
+  assert.strictEqual(fl(mk(true, 'Filbrandt T. - Chrzescian R.')), true);              // names differ: still never
+  // the other way round at DOXXbet, its prices turned by the matcher: same two players, certain
+  const rev = mk(true, 'Chrzescian Radoslaw - Filbrandt Tomasz');
+  rev.odds = rev.odds.map(o => (o.book === 'doxxbet' ? { ...o, swapped: true } : o));
+  assert.strictEqual(fl(rev), false);
+  // listed the other way round but NOT turned: the prices would be on the wrong sides, never
+  assert.strictEqual(fl(mk(true, 'Chrzescian Radoslaw - Filbrandt Tomasz')), true);
+  console.log('flipped live exception tests passed');
+}
+
+// far from kick-off: prices up to 10 min old still count; near kick-off and live: maxOddsAgeSec
+{
+  const assert = require('assert');
+  const { findSurebets } = require('../src/arb');
+  const now = 1e12;
+  const ev = (startIn, live = false) => ({ id: 'f', sport: 'tennis', home: 'A', away: 'B', start: now + startIn, live, drawPossible: false,
+    odds: [{ book: 'a', market: 'h2h', sel: '1', price: 2.2, updated: now - 5 * 60e3 }, { book: 'b', market: 'h2h', sel: '2', price: 2.2, updated: now }] });
+  const n = e => findSurebets([e], { minProfitPct: 1, bankroll: 30, step: 1, maxAgeMs: 180e3, now }).length;
+  assert.strictEqual(n(ev(24 * 3600e3)), 1);   // tomorrow: a 5-min-old price counts
+  assert.strictEqual(n(ev(2 * 3600e3)), 0);    // in 2 hours: too old
+  assert.strictEqual(n(ev(24 * 3600e3, true)), 0); // live: too old
+  const { ttlFor } = require('../src/providers/browser/detailQueue');
+  assert.strictEqual(ttlFor(Date.now() + 24 * 3600e3, 170000), 590000);
+  assert.strictEqual(ttlFor(Date.now() + 3600e3, 170000), 170000);
+  console.log('far kick-off age tests passed');
+}

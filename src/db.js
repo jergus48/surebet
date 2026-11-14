@@ -128,10 +128,12 @@ module.exports = {
   balanceBefore: (book, ts) => db.prepare('SELECT amount, ts FROM balances WHERE book = ? AND ts < ? ORDER BY ts DESC LIMIT 1').get(book, ts) || null,
   // First balance ever read per book (the starting point for profit) and the latest one.
   firstBalances: () => db.prepare('SELECT b.book, b.amount, b.ts FROM balances b JOIN (SELECT book, MIN(ts) t FROM balances GROUP BY book) f ON f.book = b.book AND f.t = b.ts').all(),
-  // Bet attempts on one match (surebet keys start with the event id): { n, last, placed }
+  // Bet attempts on one match (surebet keys start with the event id): { n, last, all, placed }
   eventBets: eventId => {
-    const rows = db.prepare("SELECT created, status FROM bets WHERE substr(surebet_key, 1, ?) = ?").all(eventId.length + 1, eventId + '|');
-    return { n: rows.length, last: Math.max(0, ...rows.map(r => r.created)), placed: rows.some(r => /^(placed|partial|unconfirmed|pending)$/.test(r.status)) };
+    const rows = db.prepare("SELECT created, status, mode FROM bets WHERE substr(surebet_key, 1, ?) = ?").all(eventId.length + 1, eventId + '|');
+    // n / last: the bot's own (auto) attempts; an "Open" (fill) you clicked does not use up its retries
+    const auto = rows.filter(r => r.mode === 'auto');
+    return { n: auto.length, last: Math.max(0, ...auto.map(r => r.created)), all: rows.length, placed: rows.some(r => /^(placed|partial|unconfirmed|pending)$/.test(r.status)) };
   },
   // Today's bets (Place clicked) per bookmaker, e.g. { chance: 3, nike: 1 }: a bet counts once for every
   // book where a leg was placed.

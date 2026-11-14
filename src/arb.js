@@ -129,6 +129,24 @@ function flippedFavourite(odds, books) {
   return fav.includes('1') && fav.includes('2');
 }
 
+// Does every one of these books name the same two teams/players, exactly? A book may list them the other way
+// round ("B - A"): then its prices must have been turned (swapped) by the matcher, and only then, so each leg
+// is on the side the surebet means. -> true when the pairing is certain.
+const foldName = t => String(t || '').replace(/\s*\([^)]*\)\s*$/, '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9-]+/g, ' ').trim();
+function sameNames(ev, books) {
+  const names = ev.names || {};
+  let ref = null;
+  for (const b of new Set(books)) {
+    const sides = foldName(names[b]).split(/\s+-\s+/);
+    if (sides.length !== 2 || !sides[0] || !sides[1]) return false;
+    const turned = ev.odds.some(o => o.book === b && o.market === 'h2h' && o.swapped);
+    const [h, a] = turned ? [sides[1], sides[0]] : sides; // in the surebet's order
+    if (!ref) ref = [h, a];
+    else if (ref[0] !== h || ref[1] !== a) return false;
+  }
+  return !!ref;
+}
+
 // Cross-market surebets (ported from the Python scanner): two legs from different markets that still
 // cover every result with one winner each, so the 2-way formula holds:
 //   draw no bet 1 + double chance X2: home wins -> DNB pays; draw -> X2 pays and DNB is refunded
@@ -150,16 +168,24 @@ function addCross(groups) {
   }
 }
 
+// Matches far from kick-off move slowly: their prices may be older (FAR_MAX_AGE_MS instead of maxOddsAgeSec).
+// The per-match detail readers keep them fresh that long, so they cover 2-3x more matches with the same
+// requests (only ~70 of ~950 Niké matches had goals / handicap prices, 2026-11-14). Every slip's price is
+// re-checked before Place, so an old price never bets: at worst the attempt stops.
+const FAR_START_MS = 6 * 3600e3, FAR_MAX_AGE_MS = 10 * 60e3;
+const maxAgeFor = (ev, maxAgeMs, now) => (maxAgeMs && !ev.live && ev.start && ev.start - now > FAR_START_MS ? Math.max(maxAgeMs, FAR_MAX_AGE_MS) : maxAgeMs);
+
 function findSurebets(events, opts = {}) {
   const { minProfitPct = 0, maxProfitPct = 100, books = null, bankroll = 100, step = 1, includeLive = true, maxAgeMs = 0, now = Date.now(), stakeTiers = null } = opts;
   const out = [];
   for (const ev of events) {
     if (!includeLive && ev.live) continue;
     const groups = new Map();
+    const maxAge = maxAgeFor(ev, maxAgeMs, now);
     for (const o of dropStale(ev.odds)) {
       if (books && !books.has(o.book)) continue;
       if (!(o.price > 1)) continue;
-      if (maxAgeMs && o.updated && now - o.updated > maxAgeMs) continue; // stale price
+      if (maxAge && o.updated && now - o.updated > maxAge) continue; // stale price
       const k = groupKey(o);
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(o);
@@ -223,7 +249,10 @@ function findSurebets(events, opts = {}) {
           suspect: legOut.some(l => l.outlier),
           // The books in this surebet clearly disagree who the favourite is: almost always two different
           // teams paired as one match ("Japonsko 1" vs "Japonsko 2") or swapped home/away. Never bet.
-          flipped: flippedFavourite(ev.odds, legOut.map(l => l.book)),
+          // Exception: a LIVE match that every one of these books names exactly the same, same order: then it
+          // is one match for sure, and one book has simply not moved its odds after the score changed yet
+          // (Filbrandt - Chrzescian, TT Elite Series, Tipsport vs DOXXbet +9.94 %, 2026-11-14).
+          flipped: flippedFavourite(ev.odds, legOut.map(l => l.book)) && !(ev.live && sameNames(ev, legOut.map(l => l.book))),
           staked: st.staked,
           worstProfit: Math.round(st.worstProfit * 100) / 100,
         });
@@ -256,4 +285,4 @@ function marketLabel(sb) {
   return sb.market;
 }
 
-module.exports = { findSurebets, stakes, bestSplit, marketLabel, dropStale, flippedFavourite, SMALL_STEP, SMALL_MIN_LEG };
+module.exports = { FAR_START_MS, FAR_MAX_AGE_MS, maxAgeFor, sameNames, findSurebets, stakes, bestSplit, marketLabel, dropStale, flippedFavourite, SMALL_STEP, SMALL_MIN_LEG };

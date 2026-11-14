@@ -209,6 +209,12 @@
       <p class="muted">Tick to enable, then Save. JSON: key = bookmaker key from the provider, port = its own debug Chrome.</p>
     </div>
     <div class="card">
+      <h3 style="margin-top:0">Auto login</h3>
+      <p class="muted">When a bookmaker logs you out, the bot logs back in by itself with the login saved here and tells you on Telegram. If Niké texts you a code, the bot asks for it on Telegram: reply with just the digits. Logins are kept in the Mac's Keychain (not in settings or git) and are never shown again here. After 2 failed tries a book waits for you; a site that mentions a limit is never logged back in.</p>
+      <div id="loginRows"></div>
+      <p id="loginLocal" class="muted"></p>
+    </div>
+    <div class="card">
       <h3 style="margin-top:0">Dashboard password</h3>
       <input id="s-dashboardPassword" type="password" placeholder="new password (8+ characters)">
     </div>
@@ -512,6 +518,41 @@ async function loadSettings() {
   $('sportCount').textContent = sportsSel.size;
   const st = await get('/api/status');
   $('creditEst').textContent = `Estimated usage: ${st.creditsPerHour} credits/hour (markets × regions × sports × scans).`;
+  loadLogins().catch(() => { });
+}
+async function loadLogins() {
+  const r = await get('/api/logins');
+  $('loginLocal').textContent = r.local ? '' : 'Saving or removing a login works only on the Mac itself (http://localhost:8080).';
+  $('loginRows').innerHTML = Object.entries(r.books).map(([k, b]) => {
+    if (!b.supported) return `<div class="row" style="margin:6px 0"><b style="width:90px">${esc(bn(k))}</b><span class="muted">auto login not set up for this site</span></div>`;
+    const last = b.last ? ` · last try ${dt(b.last.at)}: ${b.last.ok ? '<span class="green">ok</span>' : '<span class="red">' + esc(b.last.why || 'failed') + '</span>'}` : '';
+    const state = b.user ? `<span class="green">saved</span> (${esc(b.user)}${b.from === 'env' ? ', from env' : ''})${b.blocked ? ` · <span class="red">paused (${esc(b.paused ? b.paused.why : '2 failed tries')}): save the login again to retry, or log in by hand</span>` : ''}${last}` : '<span class="muted">no login saved</span>';
+    return `<div style="margin:8px 0;padding-bottom:8px;border-bottom:1px solid var(--line, #333)">
+      <div class="row"><b style="width:90px">${esc(bn(k))}</b><span>${state}</span></div>
+      <div class="row" style="margin-top:4px;gap:6px">
+        <input id="lu-${k}" placeholder="username" autocomplete="off" style="max-width:180px">
+        <input id="lp-${k}" type="password" placeholder="password" autocomplete="new-password" style="max-width:180px">
+        <button class="btn" onclick="saveLogin('${k}')">Save</button>
+        ${b.user ? `<button class="btn" onclick="testLogin('${k}')">Log in now</button> <button class="btn" onclick="delLogin('${k}')">Remove</button>` : ''}
+      </div></div>`;
+  }).join('');
+}
+async function saveLogin(k) {
+  const r = await post('/api/logins/save', { book: k, username: $('lu-' + k).value, password: $('lp-' + k).value });
+  if (r.error) return alert(r.error);
+  loadLogins();
+}
+async function delLogin(k) {
+  if (!confirm(`Remove the saved login for ${bn(k)}?`)) return;
+  const r = await post('/api/logins/delete', { book: k });
+  if (r.error) alert(r.error);
+  loadLogins();
+}
+async function testLogin(k) {
+  const r = await post('/api/logins/test', { book: k });
+  const msg = { ok: 'Logged in (or already was).', 'no-login': 'No login saved.', blocked: 'Paused: the site refused this login, or it failed twice. Save the login again first.', failed: 'Login failed: ' + ((r.last && r.last.why) || ''), busy: 'The window is busy with a bet, try again in a minute.' }[r.result];
+  alert(r.error || msg || r.result);
+  loadLogins();
 }
 async function loadSports() {
   const r = await get('/api/sports');

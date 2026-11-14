@@ -6,7 +6,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node test/arb.test.js && node test/match.test.js && node test/oddsapiio.test.js && node test/live.test.js && node test/bettor.test.js && node test/analytics.test.js && node test/payments.test.js && node test/megawin.test.js && node test/frozen.test.js && node test/livebooks.test.js && node test/markets.test.js",
+    "test": "node test/arb.test.js && node test/match.test.js && node test/oddsapiio.test.js && node test/live.test.js && node test/bettor.test.js && node test/analytics.test.js && node test/payments.test.js && node test/megawin.test.js && node test/frozen.test.js && node test/livebooks.test.js && node test/markets.test.js && node test/watch.test.js",
     "calibrate": "node scripts/calibrate.js"
   },
   "engines": {
